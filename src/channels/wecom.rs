@@ -251,6 +251,84 @@ impl WeComChannel {
         Ok(token)
     }
 
+    /// Strip markdown formatting for plain-text channels like WeCom.
+    fn strip_markdown(text: &str) -> String {
+        let mut result = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                // Strip bold/italic markers
+                '*' | '_' => {
+                    // Consume consecutive markers (**, ***, __, ___)
+                    while chars.peek() == Some(&ch) {
+                        chars.next();
+                    }
+                }
+                // Strip heading markers at line start
+                '#' if result.is_empty() || result.ends_with('\n') => {
+                    while chars.peek() == Some(&'#') {
+                        chars.next();
+                    }
+                    // Skip the space after ###
+                    if chars.peek() == Some(&' ') {
+                        chars.next();
+                    }
+                }
+                // Strip inline code backticks
+                '`' => {
+                    // Skip ``` (code fences) or single `
+                    while chars.peek() == Some(&'`') {
+                        chars.next();
+                    }
+                    // For code fences (```lang), skip until newline
+                    if result.ends_with('\n') || result.is_empty() {
+                        while chars.peek().is_some_and(|c| *c != '\n') {
+                            let c = chars.next().unwrap();
+                            // If this looks like inline content, keep it
+                            if c == ' ' || c.is_alphanumeric() {
+                                // This was a code fence language tag, skip it
+                                while chars.peek().is_some_and(|c| *c != '\n') {
+                                    chars.next();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Convert [text](url) → text
+                '[' => {
+                    let mut link_text = String::new();
+                    let mut found_close = false;
+                    for c in chars.by_ref() {
+                        if c == ']' {
+                            found_close = true;
+                            break;
+                        }
+                        link_text.push(c);
+                    }
+                    if found_close && chars.peek() == Some(&'(') {
+                        chars.next(); // skip (
+                        // skip url until )
+                        for c in chars.by_ref() {
+                            if c == ')' {
+                                break;
+                            }
+                        }
+                        result.push_str(&link_text);
+                    } else {
+                        result.push('[');
+                        result.push_str(&link_text);
+                        if found_close {
+                            result.push(']');
+                        }
+                    }
+                }
+                _ => result.push(ch),
+            }
+        }
+        result
+    }
+
     /// Send via legacy bot webhook.
     async fn send_via_webhook(
         &self,
@@ -260,9 +338,10 @@ impl WeComChannel {
         let url = format!(
             "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
         );
+        let plain = Self::strip_markdown(&message.content);
         let body = serde_json::json!({
             "msgtype": "text",
-            "text": { "content": message.content }
+            "text": { "content": plain }
         });
 
         let resp = self.http_client().post(&url).json(&body).send().await?;
@@ -296,11 +375,12 @@ impl WeComChannel {
             "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}"
         );
 
+        let plain = Self::strip_markdown(&message.content);
         let body = serde_json::json!({
             "touser": message.recipient,
             "msgtype": "text",
             "agentid": ent.agent_id,
-            "text": { "content": message.content }
+            "text": { "content": plain }
         });
 
         let resp = self.http_client().post(&url).json(&body).send().await?;
