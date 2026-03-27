@@ -118,7 +118,13 @@ impl WeComChannel {
         let ent = self.enterprise.as_ref()?;
 
         // Extract <Encrypt> from the outer XML envelope
-        let encrypt_content = xml::extract_element(body_xml, "Encrypt")?;
+        let encrypt_content = match xml::extract_element(body_xml, "Encrypt") {
+            Some(v) => v,
+            None => {
+                tracing::warn!("WeCom: failed to extract <Encrypt> from body (len={})", body_xml.len());
+                return None;
+            }
+        };
 
         // Verify signature against the encrypted content
         if !crypto::verify_signature(
@@ -133,8 +139,13 @@ impl WeComChannel {
         }
 
         // Decrypt
-        let (decrypted_xml, _corp_id) =
-            crypto::decrypt_message(&ent.aes_key, &ent.aes_iv, &encrypt_content).ok()?;
+        let (decrypted_xml, _corp_id) = match crypto::decrypt_message(&ent.aes_key, &ent.aes_iv, &encrypt_content) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("WeCom message decrypt error: {e}");
+                return None;
+            }
+        };
 
         // Parse the decrypted inner XML
         let msg = xml::parse_message_xml(&decrypted_xml)?;
@@ -426,36 +437,51 @@ pub mod crypto {
 
     /// Decrypt a WeCom AES-CBC encrypted message.
     /// Returns (content, corp_id).
+    ///
+    /// WeCom uses PKCS#7 padding with block size 32 (not 16), so we decrypt
+    /// without automatic unpadding and strip the padding manually.
     pub fn decrypt_message(
         aes_key: &[u8; 32],
         iv: &[u8; 16],
         encrypted_b64: &str,
     ) -> anyhow::Result<(String, String)> {
+        use aes::cipher::block_padding::NoPadding;
+
         let ciphertext = LENIENT_BASE64.decode(encrypted_b64)?;
         let mut buf = ciphertext.clone();
         let plaintext = Aes256CbcDec::new(aes_key.into(), iv.into())
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .decrypt_padded_mut::<NoPadding>(&mut buf)
             .map_err(|e| anyhow::anyhow!("AES decrypt failed: {e}"))?;
 
-        if plaintext.len() < 20 {
-            anyhow::bail!("Decrypted data too short ({} bytes)", plaintext.len());
+        // Strip WeCom's PKCS#7 padding (block size 32, so pad value can be 1..=32)
+        if plaintext.is_empty() {
+            anyhow::bail!("Decrypted data is empty");
+        }
+        let pad_byte = *plaintext.last().unwrap() as usize;
+        if pad_byte == 0 || pad_byte > 32 || pad_byte > plaintext.len() {
+            anyhow::bail!("Invalid PKCS7 padding value: {pad_byte}");
+        }
+        let unpadded = &plaintext[..plaintext.len() - pad_byte];
+
+        if unpadded.len() < 20 {
+            anyhow::bail!("Decrypted data too short ({} bytes)", unpadded.len());
         }
 
         // Layout: 16 random bytes | 4-byte content length (big-endian) | content | corp_id
         let content_len =
-            u32::from_be_bytes([plaintext[16], plaintext[17], plaintext[18], plaintext[19]])
+            u32::from_be_bytes([unpadded[16], unpadded[17], unpadded[18], unpadded[19]])
                 as usize;
         let content_start = 20;
         let content_end = content_start + content_len;
-        if content_end > plaintext.len() {
+        if content_end > unpadded.len() {
             anyhow::bail!(
                 "Content length {content_len} exceeds available data {}",
-                plaintext.len() - 20
+                unpadded.len() - 20
             );
         }
 
-        let content = String::from_utf8(plaintext[content_start..content_end].to_vec())?;
-        let corp_id = String::from_utf8(plaintext[content_end..].to_vec())?;
+        let content = String::from_utf8(unpadded[content_start..content_end].to_vec())?;
+        let corp_id = String::from_utf8(unpadded[content_end..].to_vec())?;
         Ok((content, corp_id))
     }
 
