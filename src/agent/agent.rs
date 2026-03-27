@@ -52,6 +52,7 @@ pub struct Agent {
     skills: Vec<crate::skills::Skill>,
     skills_prompt_mode: crate::config::SkillsPromptInjectionMode,
     auto_save: bool,
+    auto_recall: bool,
     memory_session_id: Option<String>,
     history: Vec<ConversationMessage>,
     classification_config: crate::config::QueryClassificationConfig,
@@ -83,6 +84,7 @@ pub struct AgentBuilder {
     skills: Option<Vec<crate::skills::Skill>>,
     skills_prompt_mode: Option<crate::config::SkillsPromptInjectionMode>,
     auto_save: Option<bool>,
+    auto_recall: Option<bool>,
     memory_session_id: Option<String>,
     classification_config: Option<crate::config::QueryClassificationConfig>,
     available_hints: Option<Vec<String>>,
@@ -112,6 +114,7 @@ impl AgentBuilder {
             skills: None,
             skills_prompt_mode: None,
             auto_save: None,
+            auto_recall: None,
             memory_session_id: None,
             classification_config: None,
             available_hints: None,
@@ -199,6 +202,11 @@ impl AgentBuilder {
 
     pub fn auto_save(mut self, auto_save: bool) -> Self {
         self.auto_save = Some(auto_save);
+        self
+    }
+
+    pub fn auto_recall(mut self, auto_recall: bool) -> Self {
+        self.auto_recall = Some(auto_recall);
         self
     }
 
@@ -296,6 +304,7 @@ impl AgentBuilder {
             skills: self.skills.unwrap_or_default(),
             skills_prompt_mode: self.skills_prompt_mode.unwrap_or_default(),
             auto_save: self.auto_save.unwrap_or(false),
+            auto_recall: self.auto_recall.unwrap_or(true),
             memory_session_id: self.memory_session_id,
             history: Vec::new(),
             classification_config: self.classification_config.unwrap_or_default(),
@@ -529,6 +538,7 @@ impl Agent {
             ))
             .skills_prompt_mode(config.skills.prompt_injection_mode)
             .auto_save(config.memory.auto_save)
+            .auto_recall(config.memory.auto_recall)
             .security_summary(Some(security.prompt_summary()))
             .autonomy_level(config.autonomy.level)
             .build()
@@ -683,15 +693,18 @@ impl Agent {
                 )));
         }
 
-        let context = self
-            .memory_loader
-            .load_context(
-                self.memory.as_ref(),
-                user_message,
-                self.memory_session_id.as_deref(),
-            )
-            .await
-            .unwrap_or_default();
+        let context = if self.auto_recall {
+            self.memory_loader
+                .load_context(
+                    self.memory.as_ref(),
+                    user_message,
+                    self.memory_session_id.as_deref(),
+                )
+                .await
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         if self.auto_save {
             let _ = self
@@ -863,15 +876,18 @@ impl Agent {
                 )));
         }
 
-        let context = self
-            .memory_loader
-            .load_context(
-                self.memory.as_ref(),
-                user_message,
-                self.memory_session_id.as_deref(),
-            )
-            .await
-            .unwrap_or_default();
+        let context = if self.auto_recall {
+            self.memory_loader
+                .load_context(
+                    self.memory.as_ref(),
+                    user_message,
+                    self.memory_session_id.as_deref(),
+                )
+                .await
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         if self.auto_save {
             let _ = self

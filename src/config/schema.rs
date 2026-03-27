@@ -4823,6 +4823,10 @@ pub struct MemoryConfig {
     pub backend: String,
     /// Auto-save user-stated conversation input to memory (assistant output is excluded)
     pub auto_save: bool,
+    /// Automatically recall relevant memories and inject them into the conversation context.
+    /// When false, memory is only accessed when the agent explicitly uses the memory_recall tool.
+    #[serde(default = "default_true")]
+    pub auto_recall: bool,
     /// Run memory/session hygiene (archiving + retention cleanup)
     #[serde(default = "default_hygiene_enabled")]
     pub hygiene_enabled: bool,
