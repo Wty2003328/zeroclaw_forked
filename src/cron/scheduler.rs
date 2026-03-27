@@ -4,7 +4,7 @@ use crate::channels::MatrixChannel;
 use crate::channels::WhatsAppWebChannel;
 use crate::channels::{
     Channel, DiscordChannel, MattermostChannel, QQChannel, SendMessage, SignalChannel,
-    SlackChannel, TelegramChannel,
+    SlackChannel, TelegramChannel, WeComChannel,
 };
 use crate::config::Config;
 use crate::cron::{
@@ -591,6 +591,34 @@ pub(crate) async fn deliver_announcement(
             channel
                 .send(&SendMessage::new(safe_output.as_str(), target))
                 .await?;
+        }
+        "wecom" => {
+            let wc = config
+                .channels_config
+                .wecom
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("wecom channel not configured"))?;
+            if wc.is_enterprise_app() {
+                let channel = WeComChannel::new_enterprise(
+                    wc.corp_id.clone().unwrap_or_default(),
+                    wc.corp_secret.clone().unwrap_or_default(),
+                    wc.agent_id.unwrap_or(0),
+                    wc.token.clone().unwrap_or_default(),
+                    wc.encoding_aes_key.clone().unwrap_or_default(),
+                    wc.allowed_users.clone(),
+                )
+                .map_err(|e| anyhow::anyhow!("invalid WeCom config: {e}"))?;
+                channel
+                    .send(&SendMessage::new(safe_output.as_str(), target))
+                    .await?;
+            } else if let Some(ref key) = wc.webhook_key {
+                let channel = WeComChannel::new_webhook(key.clone(), wc.allowed_users.clone());
+                channel
+                    .send(&SendMessage::new(safe_output.as_str(), target))
+                    .await?;
+            } else {
+                anyhow::bail!("wecom channel has no enterprise app or webhook key configured");
+            }
         }
         other => anyhow::bail!("unsupported delivery channel: {other}"),
     }
