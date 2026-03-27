@@ -5032,6 +5032,7 @@ impl Default for MemoryConfig {
         Self {
             backend: "sqlite".into(),
             auto_save: true,
+            auto_recall: true,
             hygiene_enabled: default_hygiene_enabled(),
             archive_after_days: default_archive_after_days(),
             purge_after_days: default_purge_after_days(),
