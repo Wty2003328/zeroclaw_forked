@@ -4755,14 +4755,18 @@ pub async fn start_channels(config: Config) -> Result<()> {
                         deferred_set.len(),
                         registry.server_count()
                     );
+                    let deferred_registry =
+                        crate::tools::DeferredToolRegistry::mcp_only(deferred_set);
                     deferred_section =
-                        crate::tools::mcp_deferred::build_deferred_tools_section(&deferred_set);
+                        crate::tools::deferred_builtin::build_deferred_tools_section(
+                            &deferred_registry,
+                        );
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         crate::tools::ActivatedToolSet::new(),
                     ));
                     ch_activated_handle = Some(std::sync::Arc::clone(&activated));
                     built_tools.push(Box::new(crate::tools::ToolSearchTool::new(
-                        deferred_set,
+                        deferred_registry,
                         activated,
                     )));
                 } else {

@@ -5403,6 +5403,13 @@ pub struct RuntimeConfig {
     /// Optional reasoning effort for providers that expose a level control.
     #[serde(default, deserialize_with = "deserialize_reasoning_effort_opt")]
     pub reasoning_effort: Option<String>,
+
+    /// When `true`, non-core built-in tools are deferred — only their names
+    /// and descriptions appear in the system prompt. The agent must call
+    /// `tool_search` to fetch full schemas before using them.  This can
+    /// dramatically reduce context-window usage.
+    #[serde(default = "default_deferred_builtin_tools")]
+    pub deferred_builtin_tools: bool,
 }
 
 /// Docker runtime configuration (`[runtime.docker]` section).
@@ -5439,6 +5446,10 @@ pub struct DockerRuntimeConfig {
 
 fn default_runtime_kind() -> String {
     "native".into()
+}
+
+fn default_deferred_builtin_tools() -> bool {
+    true
 }
 
 fn default_docker_image() -> String {
@@ -5478,6 +5489,7 @@ impl Default for RuntimeConfig {
             docker: DockerRuntimeConfig::default(),
             reasoning_enabled: None,
             reasoning_effort: None,
+            deferred_builtin_tools: default_deferred_builtin_tools(),
         }
     }
 }

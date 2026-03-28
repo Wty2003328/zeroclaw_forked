@@ -499,7 +499,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
                     let activated =
                         std::sync::Arc::new(std::sync::Mutex::new(tools::ActivatedToolSet::new()));
                     tools_registry_raw.push(Box::new(tools::ToolSearchTool::new(
-                        deferred_set,
+                        tools::DeferredToolRegistry::mcp_only(deferred_set),
                         activated,
                     )));
                 } else {

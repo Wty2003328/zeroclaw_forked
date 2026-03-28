@@ -37,6 +37,7 @@ pub mod cron_run;
 pub mod cron_runs;
 pub mod cron_update;
 pub mod data_management;
+pub mod deferred_builtin;
 pub mod delegate;
 pub mod discord_search;
 pub mod file_edit;
@@ -158,6 +159,7 @@ pub use knowledge_tool::KnowledgeTool;
 pub use linkedin::LinkedInTool;
 pub use llm_task::LlmTaskTool;
 pub use mcp_client::McpRegistry;
+pub use deferred_builtin::{DeferredBuiltinStub, DeferredToolRegistry};
 pub use mcp_deferred::{ActivatedToolSet, DeferredMcpToolSet};
 pub use mcp_tool::McpToolWrapper;
 pub use memory_forget::MemoryForgetTool;
@@ -273,6 +275,44 @@ impl Tool for ArcDelegatingTool {
 
 fn boxed_registry_from_arcs(tools: Vec<Arc<dyn Tool>>) -> Vec<Box<dyn Tool>> {
     tools.into_iter().map(ArcDelegatingTool::boxed).collect()
+}
+
+/// Tools that are always sent to the LLM with full schemas.
+/// Everything else is deferred when `runtime.deferred_builtin_tools` is enabled.
+pub const CORE_TOOL_NAMES: &[&str] = &[
+    "shell",
+    "file_read",
+    "file_write",
+    "file_edit",
+    "glob_search",
+    "content_search",
+    "memory_store",
+    "memory_recall",
+    "memory_forget",
+    "memory_purge",
+    "tool_search",
+    "plan",
+    "plan_update",
+    "ask_user",
+];
+
+/// Split a boxed tool registry into core (always-loaded) and deferred stubs.
+/// Core tools retain full schemas in every LLM request; deferred tools appear
+/// as name+description stubs until activated via `tool_search`.
+pub fn split_tools_by_tier(
+    tools: Vec<Box<dyn Tool>>,
+) -> (Vec<Box<dyn Tool>>, Vec<DeferredBuiltinStub>) {
+    let mut core = Vec::new();
+    let mut deferred = Vec::new();
+    for tool in tools {
+        if CORE_TOOL_NAMES.contains(&tool.name()) {
+            core.push(tool);
+        } else {
+            let arc: Arc<dyn Tool> = Arc::from(tool);
+            deferred.push(DeferredBuiltinStub::from_tool(arc));
+        }
+    }
+    (core, deferred)
 }
 
 /// Create the default tool registry

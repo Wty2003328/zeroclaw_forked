@@ -1,8 +1,9 @@
-//! Built-in `tool_search` tool for on-demand MCP tool schema loading.
+//! Built-in `tool_search` tool for on-demand tool schema loading.
 //!
-//! When `mcp.deferred_loading` is enabled, this tool lets the LLM discover and
-//! activate deferred MCP tools. Supports two query modes:
-//! - `select:name1,name2` — fetch exact tools by prefixed name.
+//! When deferred loading is enabled (for MCP tools, built-in tools, or both),
+//! this tool lets the LLM discover and activate deferred tools. Supports two
+//! query modes:
+//! - `select:name1,name2` — fetch exact tools by name.
 //! - Free-text keyword search — returns the best-matching stubs.
 
 use std::fmt::Write;
@@ -10,20 +11,21 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::tools::mcp_deferred::{ActivatedToolSet, DeferredMcpToolSet};
+use crate::tools::deferred_builtin::DeferredToolRegistry;
+use crate::tools::mcp_deferred::ActivatedToolSet;
 use crate::tools::traits::{Tool, ToolResult};
 
 /// Default maximum number of search results.
 const DEFAULT_MAX_RESULTS: usize = 5;
 
-/// Built-in tool that fetches full schemas for deferred MCP tools.
+/// Built-in tool that fetches full schemas for deferred tools.
 pub struct ToolSearchTool {
-    deferred: DeferredMcpToolSet,
+    deferred: DeferredToolRegistry,
     activated: Arc<Mutex<ActivatedToolSet>>,
 }
 
 impl ToolSearchTool {
-    pub fn new(deferred: DeferredMcpToolSet, activated: Arc<Mutex<ActivatedToolSet>>) -> Self {
+    pub fn new(deferred: DeferredToolRegistry, activated: Arc<Mutex<ActivatedToolSet>>) -> Self {
         Self {
             deferred,
             activated,
@@ -38,7 +40,7 @@ impl Tool for ToolSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch full schema definitions for deferred MCP tools so they can be called. \
+        "Fetch full schema definitions for deferred tools so they can be called. \
          Use \"select:name1,name2\" for exact match or keywords to search."
     }
 
@@ -103,11 +105,11 @@ impl Tool for ToolSearchTool {
         let mut activated_count = 0;
         let mut guard = self.activated.lock().unwrap();
 
-        for stub in &results {
-            if let Some(spec) = self.deferred.tool_spec(&stub.prefixed_name) {
-                if !guard.is_activated(&stub.prefixed_name) {
-                    if let Some(tool) = self.deferred.activate(&stub.prefixed_name) {
-                        guard.activate(stub.prefixed_name.clone(), Arc::from(tool));
+        for stub_info in &results {
+            if let Some(spec) = self.deferred.tool_spec(stub_info.name) {
+                if !guard.is_activated(stub_info.name) {
+                    if let Some(tool) = self.deferred.activate(stub_info.name) {
+                        guard.activate(stub_info.name.to_string(), tool);
                         activated_count += 1;
                     }
                 }
@@ -152,7 +154,7 @@ impl ToolSearchTool {
                 Some(spec) => {
                     if !guard.is_activated(name) {
                         if let Some(tool) = self.deferred.activate(name) {
-                            guard.activate(name.to_string(), Arc::from(tool));
+                            guard.activate(name.to_string(), tool);
                             activated_count += 1;
                         }
                     }
@@ -194,16 +196,17 @@ impl ToolSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::deferred_builtin::{DeferredBuiltinStub, DeferredToolRegistry};
     use crate::tools::mcp_client::McpRegistry;
-    use crate::tools::mcp_deferred::DeferredMcpToolStub;
+    use crate::tools::mcp_deferred::{DeferredMcpToolSet, DeferredMcpToolStub};
     use crate::tools::mcp_protocol::McpToolDef;
 
-    async fn make_deferred_set(stubs: Vec<DeferredMcpToolStub>) -> DeferredMcpToolSet {
+    async fn make_mcp_deferred_set(stubs: Vec<DeferredMcpToolStub>) -> DeferredMcpToolSet {
         let registry = Arc::new(McpRegistry::connect_all(&[]).await.unwrap());
         DeferredMcpToolSet { stubs, registry }
     }
 
-    fn make_stub(name: &str, desc: &str) -> DeferredMcpToolStub {
+    fn make_mcp_stub(name: &str, desc: &str) -> DeferredMcpToolStub {
         let def = McpToolDef {
             name: name.to_string(),
             description: Some(desc.to_string()),
@@ -212,10 +215,42 @@ mod tests {
         DeferredMcpToolStub::new(name.to_string(), def)
     }
 
+    struct FakeBuiltinTool {
+        tool_name: &'static str,
+        tool_desc: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for FakeBuiltinTool {
+        fn name(&self) -> &str {
+            self.tool_name
+        }
+        fn description(&self) -> &str {
+            self.tool_desc
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult {
+                success: true,
+                output: String::new(),
+                error: None,
+            })
+        }
+    }
+
+    fn make_builtin_stub(name: &'static str, desc: &'static str) -> DeferredBuiltinStub {
+        DeferredBuiltinStub::from_tool(Arc::new(FakeBuiltinTool {
+            tool_name: name,
+            tool_desc: desc,
+        }))
+    }
+
     #[tokio::test]
     async fn tool_metadata() {
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![]).await,
+            DeferredToolRegistry::new(None, vec![]),
             Arc::new(Mutex::new(ActivatedToolSet::new())),
         );
         assert_eq!(tool.name(), "tool_search");
@@ -226,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn empty_query_returns_error() {
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![]).await,
+            DeferredToolRegistry::new(None, vec![]),
             Arc::new(Mutex::new(ActivatedToolSet::new())),
         );
         let result = tool
@@ -239,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn select_nonexistent_tool_reports_not_found() {
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![]).await,
+            DeferredToolRegistry::new(None, vec![]),
             Arc::new(Mutex::new(ActivatedToolSet::new())),
         );
         let result = tool
@@ -253,7 +288,9 @@ mod tests {
     #[tokio::test]
     async fn keyword_search_no_matches() {
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![make_stub("fs__read", "Read file")]).await,
+            DeferredToolRegistry::mcp_only(
+                make_mcp_deferred_set(vec![make_mcp_stub("fs__read", "Read file")]).await,
+            ),
             Arc::new(Mutex::new(ActivatedToolSet::new())),
         );
         let result = tool
@@ -265,10 +302,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn keyword_search_finds_match() {
+    async fn keyword_search_finds_mcp_match() {
         let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![make_stub("fs__read", "Read a file from disk")]).await,
+            DeferredToolRegistry::mcp_only(
+                make_mcp_deferred_set(vec![make_mcp_stub(
+                    "fs__read",
+                    "Read a file from disk",
+                )])
+                .await,
+            ),
             Arc::clone(&activated),
         );
         let result = tool
@@ -278,24 +321,84 @@ mod tests {
         assert!(result.success);
         assert!(result.output.contains("<function>"));
         assert!(result.output.contains("fs__read"));
-        // Tool should now be activated
         assert!(activated.lock().unwrap().is_activated("fs__read"));
     }
 
-    /// Verify tool_search works with stubs from multiple MCP servers,
-    /// simulating a daemon-mode setup where several servers are deferred.
+    #[tokio::test]
+    async fn keyword_search_finds_builtin_match() {
+        let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
+        let tool = ToolSearchTool::new(
+            DeferredToolRegistry::builtin_only(vec![make_builtin_stub(
+                "git_operations",
+                "Run git commands like status, diff, log",
+            )]),
+            Arc::clone(&activated),
+        );
+        let result = tool
+            .execute(serde_json::json!({"query": "git status"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("<function>"));
+        assert!(result.output.contains("git_operations"));
+        assert!(activated.lock().unwrap().is_activated("git_operations"));
+    }
+
+    #[tokio::test]
+    async fn select_activates_builtin_tool() {
+        let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
+        let tool = ToolSearchTool::new(
+            DeferredToolRegistry::builtin_only(vec![make_builtin_stub(
+                "http_request",
+                "Make HTTP requests",
+            )]),
+            Arc::clone(&activated),
+        );
+        let result = tool
+            .execute(serde_json::json!({"query": "select:http_request"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("http_request"));
+        assert!(activated.lock().unwrap().is_activated("http_request"));
+    }
+
+    #[tokio::test]
+    async fn search_finds_across_mcp_and_builtin() {
+        let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
+        let mcp_set =
+            make_mcp_deferred_set(vec![make_mcp_stub("srv__read_file", "Read a file")]).await;
+        let builtin = vec![make_builtin_stub(
+            "pdf_read",
+            "Read and extract text from PDF files",
+        )];
+        let tool = ToolSearchTool::new(
+            DeferredToolRegistry::new(Some(mcp_set), builtin),
+            Arc::clone(&activated),
+        );
+        let result = tool
+            .execute(serde_json::json!({"query": "read"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("srv__read_file"));
+        assert!(result.output.contains("pdf_read"));
+    }
+
     #[tokio::test]
     async fn multiple_servers_stubs_all_searchable() {
         let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
         let stubs = vec![
-            make_stub("server_a__list_files", "List files on server A"),
-            make_stub("server_a__read_file", "Read file on server A"),
-            make_stub("server_b__query_db", "Query database on server B"),
-            make_stub("server_b__insert_row", "Insert row on server B"),
+            make_mcp_stub("server_a__list_files", "List files on server A"),
+            make_mcp_stub("server_a__read_file", "Read file on server A"),
+            make_mcp_stub("server_b__query_db", "Query database on server B"),
+            make_mcp_stub("server_b__insert_row", "Insert row on server B"),
         ];
-        let tool = ToolSearchTool::new(make_deferred_set(stubs).await, Arc::clone(&activated));
+        let tool = ToolSearchTool::new(
+            DeferredToolRegistry::mcp_only(make_mcp_deferred_set(stubs).await),
+            Arc::clone(&activated),
+        );
 
-        // Search should find tools across both servers
         let result = tool
             .execute(serde_json::json!({"query": "file"}))
             .await
@@ -304,7 +407,6 @@ mod tests {
         assert!(result.output.contains("server_a__list_files"));
         assert!(result.output.contains("server_a__read_file"));
 
-        // Server B tools should also be searchable
         let result = tool
             .execute(serde_json::json!({"query": "database query"}))
             .await
@@ -313,46 +415,40 @@ mod tests {
         assert!(result.output.contains("server_b__query_db"));
     }
 
-    /// Verify select mode activates tools and they stay activated across calls,
-    /// matching the daemon-mode pattern where a single ActivatedToolSet persists.
     #[tokio::test]
     async fn select_activates_and_persists_across_calls() {
         let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
         let stubs = vec![
-            make_stub("srv__tool_a", "Tool A"),
-            make_stub("srv__tool_b", "Tool B"),
+            make_mcp_stub("srv__tool_a", "Tool A"),
+            make_mcp_stub("srv__tool_b", "Tool B"),
         ];
-        let tool = ToolSearchTool::new(make_deferred_set(stubs).await, Arc::clone(&activated));
+        let tool = ToolSearchTool::new(
+            DeferredToolRegistry::mcp_only(make_mcp_deferred_set(stubs).await),
+            Arc::clone(&activated),
+        );
 
-        // Activate tool_a
-        let result = tool
-            .execute(serde_json::json!({"query": "select:srv__tool_a"}))
+        tool.execute(serde_json::json!({"query": "select:srv__tool_a"}))
             .await
             .unwrap();
-        assert!(result.success);
         assert!(activated.lock().unwrap().is_activated("srv__tool_a"));
-        assert!(!activated.lock().unwrap().is_activated("srv__tool_b"));
 
-        // Activate tool_b in a separate call
-        let result = tool
-            .execute(serde_json::json!({"query": "select:srv__tool_b"}))
+        tool.execute(serde_json::json!({"query": "select:srv__tool_b"}))
             .await
             .unwrap();
-        assert!(result.success);
 
-        // Both should remain activated
         let guard = activated.lock().unwrap();
         assert!(guard.is_activated("srv__tool_a"));
         assert!(guard.is_activated("srv__tool_b"));
         assert_eq!(guard.tool_specs().len(), 2);
     }
 
-    /// Verify re-activating an already-activated tool does not duplicate it.
     #[tokio::test]
     async fn reactivation_is_idempotent() {
         let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
         let tool = ToolSearchTool::new(
-            make_deferred_set(vec![make_stub("srv__tool", "A tool")]).await,
+            DeferredToolRegistry::mcp_only(
+                make_mcp_deferred_set(vec![make_mcp_stub("srv__tool", "A tool")]).await,
+            ),
             Arc::clone(&activated),
         );
 

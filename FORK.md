@@ -42,3 +42,14 @@ Two new tools (`plan` and `plan_update`) that let the agent declare and track a 
 - Agent calls `plan_update` to mark steps as in-progress/completed/failed
 - Plain-text checklist format works across all channels
 - Step status indicators: pending, in-progress, completed, skipped, failed
+
+### Progressive Tool Loading
+
+Extends the MCP deferred loading pattern to built-in tools, dramatically reducing context window usage. Instead of sending all ~40+ tool schemas to the LLM upfront, only core tools are loaded eagerly — everything else is deferred until the agent explicitly requests it via `tool_search`.
+
+- **Core tools** (always loaded): `shell`, `file_read/write/edit`, `glob_search`, `content_search`, `memory_*`, `plan/plan_update`, `ask_user`, `tool_search`
+- **Deferred tools** (loaded on demand): `cron_*`, `browser*`, `http_request`, `git_operations`, `delegate`, integrations, etc.
+- **Unified `DeferredToolRegistry`**: searches across both MCP and built-in deferred tools
+- **Dynamic tool list**: reflects currently installed/configured tools per session
+- **Opt-out**: `runtime.deferred_builtin_tools = false` to restore eager loading
+- **~97% context savings** on tool schemas for most conversations

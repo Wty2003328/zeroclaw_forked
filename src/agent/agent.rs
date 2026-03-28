@@ -430,7 +430,7 @@ impl Agent {
                             tools::ActivatedToolSet::new(),
                         ));
                         tools.push(Box::new(tools::ToolSearchTool::new(
-                            deferred_set,
+                            tools::DeferredToolRegistry::mcp_only(deferred_set),
                             activated,
                         )));
                     } else {
