@@ -1,0 +1,40 @@
+name: Claude Code
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt for Claude Code"
+        required: true
+        type: string
+      branch:
+        description: "Branch to work on (leave empty for new branch)"
+        required: false
+        type: string
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude:
+    # For issue_comment, only run if comment starts with @claude
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       startsWith(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.head_ref || 'master' }}
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ inputs.prompt || '' }}
+          allowed_tools: "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch"
