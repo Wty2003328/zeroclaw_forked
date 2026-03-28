@@ -23,7 +23,3 @@ Configurable `auto_recall` setting that controls whether ZeroClaw automatically 
 - New `auto_recall` field in `MemoryConfig` (defaults to `true` for backward compatibility)
 - Integrated into the onboard wizard for first-time setup
 - Allows users to disable automatic memory injection when not needed, reducing token usage
-
-## Contributing Upstream
-
-These features are developed with the intent to contribute back to the upstream project. If you're interested in WeCom support or memory control for ZeroClaw, feel free to open an issue or PR on the [upstream repo](https://github.com/zeroclaw-labs/zeroclaw).
