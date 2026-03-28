@@ -3,13 +3,16 @@
 //! Provides a pre-execution hook that prompts the user before tool calls,
 //! with session-scoped "Always" allowlists and audit logging.
 
+use crate::channels::traits::{Channel, SendMessage};
 use crate::config::AutonomyConfig;
 use crate::security::AutonomyLevel;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -193,6 +196,160 @@ impl ApprovalManager {
     /// auto-deny in the tool-call loop before reaching this point.
     pub fn prompt_cli(&self, request: &ApprovalRequest) -> ApprovalResponse {
         prompt_cli_interactive(request)
+    }
+}
+
+// ── Channel approval bridge ──────────────────────────────────────
+
+/// A pending approval waiting for a channel user to respond.
+struct PendingApproval {
+    #[allow(dead_code)]
+    request: ApprovalRequest,
+    response_tx: tokio::sync::oneshot::Sender<ApprovalResponse>,
+    #[allow(dead_code)]
+    created_at: Instant,
+}
+
+/// Bridges the approval workflow to text-based messaging channels.
+///
+/// When a tool needs approval during a channel-driven run, the bridge:
+/// 1. Sends a formatted approval request to the channel.
+/// 2. Waits (with timeout) for the user's reply.
+/// 3. Parses the reply keyword and resolves the pending approval.
+///
+/// The dispatch loop calls [`try_resolve`] on each incoming message before
+/// routing to the LLM. If the message matches a pending approval scope it is
+/// consumed; otherwise it flows through normally.
+pub struct ChannelApprovalBridge {
+    pending: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    timeout_secs: u64,
+}
+
+impl ChannelApprovalBridge {
+    pub fn new(timeout_secs: u64) -> Self {
+        Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            timeout_secs,
+        }
+    }
+
+    /// Register a pending approval and return a receiver that the agent loop
+    /// awaits. If there was already a pending approval for this scope it is
+    /// cancelled (the old sender is dropped, which resolves to `RecvError`).
+    pub fn register_pending(
+        &self,
+        scope_key: &str,
+        request: ApprovalRequest,
+    ) -> tokio::sync::oneshot::Receiver<ApprovalResponse> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let entry = PendingApproval {
+            request,
+            response_tx: tx,
+            created_at: Instant::now(),
+        };
+        let mut pending = self.pending.lock();
+        // Drop any previous pending approval for this scope (auto-cancels).
+        pending.insert(scope_key.to_string(), entry);
+        rx
+    }
+
+    /// Try to resolve a pending approval for `scope_key` with the given reply
+    /// text. Returns `true` if the message was consumed as an approval reply.
+    pub fn try_resolve(&self, scope_key: &str, reply_text: &str) -> bool {
+        let response = match parse_approval_reply(reply_text) {
+            Some(r) => r,
+            None => return false,
+        };
+        let entry = {
+            let mut pending = self.pending.lock();
+            // Only consume if there is actually a pending approval.
+            if !pending.contains_key(scope_key) {
+                return false;
+            }
+            pending.remove(scope_key)
+        };
+        if let Some(entry) = entry {
+            let _ = entry.response_tx.send(response);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` if there is a pending approval for the given scope.
+    pub fn has_pending(&self, scope_key: &str) -> bool {
+        self.pending.lock().contains_key(scope_key)
+    }
+
+    /// Format an approval request into a user-facing message.
+    pub fn format_approval_message(request: &ApprovalRequest) -> String {
+        let summary = summarize_args(&request.arguments);
+        format!(
+            "\u{1f512} Approval needed: {}\n   {}\nReply: approve / deny / always",
+            request.tool_name, summary
+        )
+    }
+}
+
+/// Parse a channel reply into an approval response.
+///
+/// Returns `None` for text that doesn't match any approval keyword, so the
+/// message can continue to the LLM pipeline.
+pub fn parse_approval_reply(text: &str) -> Option<ApprovalResponse> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" | "approve" | "approved" => Some(ApprovalResponse::Yes),
+        "n" | "no" | "deny" | "denied" | "reject" => Some(ApprovalResponse::No),
+        "a" | "always" | "allow always" => Some(ApprovalResponse::Always),
+        _ => None,
+    }
+}
+
+/// Compute the scope key for approval routing.
+///
+/// Format: `"channel:sender:thread"` — each unique combination can have one
+/// pending approval at a time.
+pub fn approval_scope_key(channel: &str, sender: &str, thread_ts: Option<&str>) -> String {
+    format!("{}:{}:{}", channel, sender, thread_ts.unwrap_or(""))
+}
+
+impl ApprovalManager {
+    /// Prompt for approval via a messaging channel.
+    ///
+    /// Sends a formatted approval request, then waits for the user to reply
+    /// within the configured timeout. Returns [`ApprovalResponse::No`] on
+    /// timeout or if the channel send fails.
+    pub async fn prompt_channel(
+        &self,
+        request: &ApprovalRequest,
+        channel: &dyn Channel,
+        recipient: &str,
+        thread_ts: Option<&str>,
+        bridge: &ChannelApprovalBridge,
+        scope_key: &str,
+    ) -> ApprovalResponse {
+        let rx = bridge.register_pending(scope_key, request.clone());
+
+        let msg_text = ChannelApprovalBridge::format_approval_message(request);
+        let send_msg = SendMessage::new(msg_text, recipient).in_thread(thread_ts.map(String::from));
+        if let Err(e) = channel.send(&send_msg).await {
+            tracing::warn!(error = %e, "Failed to send approval request to channel");
+            return ApprovalResponse::No;
+        }
+
+        let timeout = Duration::from_secs(bridge.timeout_secs);
+        tokio::select! {
+            result = rx => {
+                match result {
+                    Ok(response) => response,
+                    Err(_) => ApprovalResponse::No, // sender dropped (cancelled)
+                }
+            }
+            _ = tokio::time::sleep(timeout) => {
+                // Clean up the pending entry on timeout.
+                bridge.pending.lock().remove(scope_key);
+                ApprovalResponse::No
+            }
+        }
     }
 }
 
@@ -607,5 +764,113 @@ mod tests {
             mgr.needs_approval("weather"),
             "always_ask must override auto_approve"
         );
+    }
+
+    // ── parse_approval_reply ────────────────────────────────
+
+    #[test]
+    fn parse_approve_keywords() {
+        assert_eq!(parse_approval_reply("approve"), Some(ApprovalResponse::Yes));
+        assert_eq!(parse_approval_reply("Approved"), Some(ApprovalResponse::Yes));
+        assert_eq!(parse_approval_reply("  yes  "), Some(ApprovalResponse::Yes));
+        assert_eq!(parse_approval_reply("Y"), Some(ApprovalResponse::Yes));
+    }
+
+    #[test]
+    fn parse_deny_keywords() {
+        assert_eq!(parse_approval_reply("deny"), Some(ApprovalResponse::No));
+        assert_eq!(parse_approval_reply("No"), Some(ApprovalResponse::No));
+        assert_eq!(parse_approval_reply("REJECT"), Some(ApprovalResponse::No));
+        assert_eq!(parse_approval_reply("denied"), Some(ApprovalResponse::No));
+    }
+
+    #[test]
+    fn parse_always_keywords() {
+        assert_eq!(
+            parse_approval_reply("always"),
+            Some(ApprovalResponse::Always)
+        );
+        assert_eq!(parse_approval_reply("a"), Some(ApprovalResponse::Always));
+        assert_eq!(
+            parse_approval_reply("Allow Always"),
+            Some(ApprovalResponse::Always)
+        );
+    }
+
+    #[test]
+    fn parse_non_approval_returns_none() {
+        assert_eq!(parse_approval_reply("hello world"), None);
+        assert_eq!(parse_approval_reply("run git push"), None);
+        assert_eq!(parse_approval_reply(""), None);
+    }
+
+    // ── ChannelApprovalBridge ───────────────────────────────
+
+    #[test]
+    fn bridge_register_and_resolve() {
+        let bridge = ChannelApprovalBridge::new(300);
+        let request = ApprovalRequest {
+            tool_name: "shell".into(),
+            arguments: serde_json::json!({"command": "git push"}),
+        };
+        let mut rx = bridge.register_pending("wecom:user1:", request);
+        assert!(bridge.has_pending("wecom:user1:"));
+
+        let resolved = bridge.try_resolve("wecom:user1:", "approve");
+        assert!(resolved);
+        assert!(!bridge.has_pending("wecom:user1:"));
+
+        // The receiver should have the response.
+        let response = rx.try_recv().unwrap();
+        assert_eq!(response, ApprovalResponse::Yes);
+    }
+
+    #[test]
+    fn bridge_try_resolve_no_pending() {
+        let bridge = ChannelApprovalBridge::new(300);
+        assert!(!bridge.try_resolve("wecom:user1:", "approve"));
+    }
+
+    #[test]
+    fn bridge_try_resolve_non_approval_text() {
+        let bridge = ChannelApprovalBridge::new(300);
+        let request = ApprovalRequest {
+            tool_name: "shell".into(),
+            arguments: serde_json::json!({}),
+        };
+        let _rx = bridge.register_pending("wecom:user1:", request);
+        // Non-approval text should not consume the pending entry.
+        assert!(!bridge.try_resolve("wecom:user1:", "hello world"));
+        assert!(bridge.has_pending("wecom:user1:"));
+    }
+
+    // ── approval_scope_key ──────────────────────────────────
+
+    #[test]
+    fn scope_key_format() {
+        assert_eq!(
+            approval_scope_key("wecom", "user1", None),
+            "wecom:user1:"
+        );
+        assert_eq!(
+            approval_scope_key("telegram", "user2", Some("thread123")),
+            "telegram:user2:thread123"
+        );
+    }
+
+    // ── format_approval_message ─────────────────────────────
+
+    #[test]
+    fn format_message_contains_tool_name() {
+        let req = ApprovalRequest {
+            tool_name: "shell".into(),
+            arguments: serde_json::json!({"command": "rm -rf /tmp/build"}),
+        };
+        let msg = ChannelApprovalBridge::format_approval_message(&req);
+        assert!(msg.contains("shell"));
+        assert!(msg.contains("rm -rf /tmp/build"));
+        assert!(msg.contains("approve"));
+        assert!(msg.contains("deny"));
+        assert!(msg.contains("always"));
     }
 }

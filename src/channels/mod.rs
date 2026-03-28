@@ -107,7 +107,7 @@ use crate::agent::loop_::{
     build_tool_instructions, clear_model_switch_request, get_model_switch_state,
     is_model_switch_requested, run_tool_call_loop, scrub_credentials,
 };
-use crate::approval::ApprovalManager;
+use crate::approval::{approval_scope_key, ApprovalManager, ChannelApprovalBridge};
 use crate::config::Config;
 use crate::identity;
 use crate::memory::{self, Memory};
@@ -389,6 +389,8 @@ struct ChannelRuntimeContext {
     /// `[autonomy]` config; auto-denies tools that would need interactive
     /// approval since no operator is present on channel runs.
     approval_manager: Arc<ApprovalManager>,
+    /// Bridge for channel-based approval (when `enable_channel_approval` is true).
+    channel_approval_bridge: Option<Arc<ChannelApprovalBridge>>,
     activated_tools: Option<std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
     cost_tracking: Option<ChannelCostTrackingState>,
     pacing: crate::config::PacingConfig,
@@ -2747,6 +2749,19 @@ async fn process_channel_message(
                     ctx.activated_tools.as_ref(),
                     Some(model_switch_callback.clone()),
                     &ctx.pacing,
+                    // Channel-based approval: resolve the channel for sending
+                    // approval prompts and pass the bridge.
+                    ctx.channel_approval_bridge.as_ref().and_then(|_| {
+                        ctx.channels_by_name
+                            .get(&msg.channel)
+                            .or_else(|| {
+                                msg.channel
+                                    .split_once(':')
+                                    .and_then(|(base, _)| ctx.channels_by_name.get(base))
+                            })
+                            .map(|c| c.as_ref() as &dyn Channel)
+                    }),
+                    ctx.channel_approval_bridge.as_deref(),
                 ),
                 ),
             ) => LlmExecutionResult::Completed(result),
@@ -3255,6 +3270,25 @@ async fn run_message_dispatch_loop(
                 );
             }
             continue;
+        }
+
+        // Fast path: check if this message is an approval reply for a pending
+        // channel-based approval request. If so, resolve it and skip normal
+        // processing — the message is consumed by the approval bridge.
+        if let Some(ref bridge) = ctx.channel_approval_bridge {
+            let scope_key = approval_scope_key(
+                &msg.channel,
+                &msg.sender,
+                msg.thread_ts.as_deref(),
+            );
+            if bridge.try_resolve(&scope_key, &msg.content) {
+                tracing::debug!(
+                    channel = %msg.channel,
+                    sender = %msg.sender,
+                    "Approval reply intercepted"
+                );
+                continue;
+            }
         }
 
         let permit = match Arc::clone(&semaphore).acquire_owned().await {
@@ -5089,6 +5123,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
             None
         },
         approval_manager: Arc::new(ApprovalManager::for_non_interactive(&config.autonomy)),
+        channel_approval_bridge: if config.autonomy.enable_channel_approval {
+            Some(Arc::new(ChannelApprovalBridge::new(
+                config.autonomy.channel_approval_timeout_secs,
+            )))
+        } else {
+            None
+        },
         activated_tools: ch_activated_handle,
         cost_tracking: crate::cost::CostTracker::get_or_init_global(
             config.cost.clone(),
@@ -5472,6 +5513,7 @@ mod tests {
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -5591,6 +5633,7 @@ mod tests {
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -5666,6 +5709,7 @@ mod tests {
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -5760,6 +5804,7 @@ mod tests {
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6304,6 +6349,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6389,6 +6435,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6488,6 +6535,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6572,6 +6620,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6666,6 +6715,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6781,6 +6831,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6877,6 +6928,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -6988,6 +7040,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -7084,6 +7137,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig {
@@ -7173,6 +7227,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig {
@@ -7380,6 +7435,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -7487,6 +7543,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -7608,6 +7665,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             query_classification: crate::config::QueryClassificationConfig::default(),
@@ -7728,6 +7786,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -7829,6 +7888,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -7913,6 +7973,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -8694,6 +8755,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -8830,6 +8892,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -9007,6 +9070,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -9119,6 +9183,7 @@ BTC is currently around $65,000 based on latest tool output."#
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -9695,6 +9760,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -9786,6 +9852,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -9953,6 +10020,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -10068,6 +10136,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -10175,6 +10244,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -10302,6 +10372,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),
@@ -10570,6 +10641,7 @@ This is an example JSON object for profile settings."#;
             approval_manager: Arc::new(ApprovalManager::for_non_interactive(
                 &crate::config::AutonomyConfig::default(),
             )),
+            channel_approval_bridge: None,
             activated_tools: None,
             cost_tracking: None,
             pacing: crate::config::PacingConfig::default(),

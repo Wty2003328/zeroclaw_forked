@@ -5260,6 +5260,22 @@ pub struct AutonomyConfig {
     /// model in tool specs.
     #[serde(default)]
     pub non_cli_excluded_tools: Vec<String>,
+
+    /// Enable interactive approval via messaging channels (WeCom, Telegram, etc.).
+    ///
+    /// When `true`, tools that need approval in non-interactive mode will send an
+    /// approval request to the channel and wait for the user to reply
+    /// (`approve` / `deny` / `always`) instead of being auto-denied.
+    /// Default: `false` (existing auto-deny behaviour).
+    #[serde(default)]
+    pub enable_channel_approval: bool,
+
+    /// Timeout in seconds for channel-based approval requests.
+    ///
+    /// If the user does not respond within this window the tool call is
+    /// automatically denied. Default: `300` (5 minutes).
+    #[serde(default = "default_channel_approval_timeout")]
+    pub channel_approval_timeout_secs: u64,
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -5278,6 +5294,10 @@ fn default_auto_approve() -> Vec<String> {
 
 fn default_always_ask() -> Vec<String> {
     vec![]
+}
+
+fn default_channel_approval_timeout() -> u64 {
+    300
 }
 
 impl AutonomyConfig {
@@ -5355,6 +5375,8 @@ impl Default for AutonomyConfig {
             always_ask: default_always_ask(),
             allowed_roots: Vec::new(),
             non_cli_excluded_tools: Vec::new(),
+            enable_channel_approval: false,
+            channel_approval_timeout_secs: default_channel_approval_timeout(),
         }
     }
 }
@@ -11279,6 +11301,8 @@ auto_save = true
                 always_ask: vec![],
                 allowed_roots: vec![],
                 non_cli_excluded_tools: vec![],
+                enable_channel_approval: false,
+                channel_approval_timeout_secs: 300,
             },
             backup: BackupConfig::default(),
             data_retention: DataRetentionConfig::default(),

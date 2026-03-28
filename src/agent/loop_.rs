@@ -2487,6 +2487,8 @@ pub(crate) async fn agent_turn(
         activated_tools,
         model_switch_callback,
         &crate::config::PacingConfig::default(),
+        None,
+        None,
     )
     .await
 }
@@ -2797,6 +2799,8 @@ pub(crate) async fn run_tool_call_loop(
     activated_tools: Option<&std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
     model_switch_callback: Option<ModelSwitchCallback>,
     pacing: &crate::config::PacingConfig,
+    channel_for_approval: Option<&(dyn crate::channels::traits::Channel + '_)>,
+    approval_bridge: Option<&crate::approval::ChannelApprovalBridge>,
 ) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
@@ -3408,10 +3412,28 @@ pub(crate) async fn run_tool_call_loop(
                     };
 
                     // Interactive CLI: prompt the operator.
-                    // Non-interactive (channels): auto-deny since no operator
-                    // is present to approve.
+                    // Non-interactive (channels): prompt via channel bridge if
+                    // enabled, otherwise auto-deny.
                     let decision = if mgr.is_non_interactive() {
-                        ApprovalResponse::No
+                        match (channel_for_approval, approval_bridge) {
+                            (Some(channel), Some(bridge)) => {
+                                let scope_key = crate::approval::approval_scope_key(
+                                    channel_name,
+                                    channel_reply_target.unwrap_or(channel_name),
+                                    None,
+                                );
+                                mgr.prompt_channel(
+                                    &request,
+                                    channel,
+                                    channel_reply_target.unwrap_or(channel_name),
+                                    None,
+                                    bridge,
+                                    &scope_key,
+                                )
+                                .await
+                            }
+                            _ => ApprovalResponse::No,
+                        }
                     } else {
                         mgr.prompt_cli(&request)
                     };
@@ -4318,6 +4340,8 @@ pub async fn run(
                 activated_handle.as_ref(),
                 Some(model_switch_callback.clone()),
                 &config.pacing,
+                None, // channel_for_approval (CLI uses stdin)
+                None, // approval_bridge
             )
             .await
             {
@@ -4619,6 +4643,8 @@ pub async fn run(
                     activated_handle.as_ref(),
                     Some(model_switch_callback.clone()),
                     &config.pacing,
+                    None,
+                    None,
                 )
                 .await
                 {
@@ -5833,6 +5859,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("provider without vision support should fail");
@@ -5885,6 +5913,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("oversized payload must fail");
@@ -5930,6 +5960,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("valid multimodal payload should pass");
@@ -5975,6 +6007,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("should fail without vision_provider config");
@@ -6027,6 +6061,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("should fail when vision provider cannot be created");
@@ -6079,6 +6115,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("text-only messages should succeed with default provider");
@@ -6132,6 +6170,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("should fail due to nonexistent vision provider");
@@ -6183,6 +6223,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("empty image markers should not trigger vision routing");
@@ -6234,6 +6276,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect_err("should attempt vision provider creation for multiple images");
@@ -6368,6 +6412,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("parallel execution should complete");
@@ -6439,6 +6485,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("cron_add delivery defaults should be injected");
@@ -6502,6 +6550,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("explicit delivery mode should be preserved");
@@ -6560,6 +6610,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("loop should finish after deduplicating repeated calls");
@@ -6630,6 +6682,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("non-interactive shell should succeed for low-risk command");
@@ -6691,6 +6745,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("loop should finish with exempt tool executing twice");
@@ -6772,6 +6828,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("loop should complete");
@@ -6830,6 +6888,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("native fallback id flow should complete");
@@ -6912,6 +6972,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("native tool-call text should be relayed through on_delta");
@@ -6978,6 +7040,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("streaming provider should complete");
@@ -7046,6 +7110,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("streaming tool loop should execute tool and finish");
@@ -7118,6 +7184,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("native streaming events should preserve tool loop semantics");
@@ -7199,6 +7267,8 @@ mod tests {
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("routed streaming provider should complete");
@@ -9195,6 +9265,8 @@ Let me check the result."#;
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("tool loop should complete");
@@ -9349,6 +9421,8 @@ Let me check the result."#;
                     None,
                     None,
                     &crate::config::PacingConfig::default(),
+                    None,
+                    None,
                 ),
             )
             .await
@@ -9428,6 +9502,8 @@ Let me check the result."#;
                     None,
                     None,
                     &crate::config::PacingConfig::default(),
+                    None,
+                    None,
                 ),
             )
             .await
@@ -9483,6 +9559,8 @@ Let me check the result."#;
             None,
             None,
             &crate::config::PacingConfig::default(),
+            None,
+            None,
         )
         .await
         .expect("should succeed without cost scope");

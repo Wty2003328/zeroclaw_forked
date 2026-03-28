@@ -78,6 +78,7 @@ pub mod notion_tool;
 pub mod opencode_cli;
 pub mod pdf_read;
 pub mod pipeline;
+pub mod plan;
 pub mod poll;
 pub mod project_intel;
 pub mod proxy_config;
@@ -396,6 +397,7 @@ pub fn all_tools_with_runtime(
 ) {
     let has_shell_access = runtime.has_shell_access();
     let sandbox = create_sandbox(&root_config.security);
+    let plan_store = Arc::new(plan::TaskPlanStore::new());
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
         Arc::new(
             ShellTool::new_with_sandbox(security.clone(), runtime, sandbox)
@@ -417,6 +419,8 @@ pub fn all_tools_with_runtime(
         Arc::new(MemoryForgetTool::new(memory.clone(), security.clone())),
         Arc::new(MemoryPurgeTool::new(memory, security.clone())),
         Arc::new(ScheduleTool::new(security.clone(), root_config.clone())),
+        Arc::new(plan::PlanTool::new(Arc::clone(&plan_store))),
+        Arc::new(plan::PlanUpdateTool::new(Arc::clone(&plan_store))),
         Arc::new(ModelRoutingConfigTool::new(
             config.clone(),
             security.clone(),
