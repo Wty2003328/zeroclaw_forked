@@ -1,3 +1,5 @@
+> **This is a fork** of [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw) with added WeCom Enterprise App support and memory control features. See **[FORK.md](FORK.md)** for details.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/docs/assets/zeroclaw-banner.png" alt="ZeroClaw" width="600" />
 </p>
