@@ -2752,14 +2752,21 @@ async fn process_channel_message(
                     // Channel-based approval: resolve the channel for sending
                     // approval prompts and pass the bridge.
                     ctx.channel_approval_bridge.as_ref().and_then(|_| {
-                        ctx.channels_by_name
+                        let resolved = ctx.channels_by_name
                             .get(&msg.channel)
                             .or_else(|| {
                                 msg.channel
                                     .split_once(':')
                                     .and_then(|(base, _)| ctx.channels_by_name.get(base))
-                            })
-                            .map(|c| c.as_ref() as &dyn Channel)
+                            });
+                        if resolved.is_none() {
+                            tracing::warn!(
+                                channel = %msg.channel,
+                                available = ?ctx.channels_by_name.keys().collect::<Vec<_>>(),
+                                "Channel approval: failed to resolve channel for approval routing"
+                            );
+                        }
+                        resolved.map(|c| c.as_ref() as &dyn Channel)
                     }),
                     ctx.channel_approval_bridge.as_deref(),
                 ),
@@ -3553,12 +3560,6 @@ pub fn build_system_prompt_with_mode_and_autonomy(
     // ── 2. Safety ───────────────────────────────────────────────
     prompt.push_str("## Safety\n\n");
     prompt.push_str("- Do not exfiltrate private data.\n");
-    if autonomy_config.map(|cfg| cfg.level) != Some(crate::security::AutonomyLevel::Full) {
-        prompt.push_str(
-            "- Do not run destructive commands without asking.\n\
-             - Do not bypass oversight or approval mechanisms.\n",
-        );
-    }
     prompt.push_str("- Prefer `trash` over `rm` (recoverable beats gone forever).\n");
     prompt.push_str(match autonomy_config.map(|cfg| cfg.level) {
         Some(crate::security::AutonomyLevel::Full) => {
@@ -3570,11 +3571,10 @@ pub fn build_system_prompt_with_mode_and_autonomy(
              - If a requested action is blocked by policy, explain the restriction directly instead of simulating an approval dialog.\n"
         }
         _ => {
-            "- When in doubt, ask before acting externally.\n\
-             - Respect the runtime autonomy policy: ask for approval only when the current runtime policy actually requires it.\n\
-             - ALWAYS attempt tool calls when the user requests an action — do NOT preemptively refuse or claim a tool is blocked. \
-             The runtime will handle approval automatically (including via channel messages). \
-             If a tool call is truly denied, you will receive an error — only then explain the restriction.\n"
+            "- **You MUST call tools using structured tool calls** whenever the user requests an action — file_write, file_edit, shell, and all other tools are yours to use.\n\
+             - Do NOT preemptively refuse, say a tool is \"blocked\", or claim you \"cannot\" perform an action. Just call the tool.\n\
+             - The runtime handles approval automatically (including prompting the user via this channel). You will receive an error result only if approval is actually denied.\n\
+             - Do not bypass oversight or approval mechanisms.\n"
         }
     });
     prompt.push('\n');

@@ -3417,12 +3417,17 @@ pub(crate) async fn run_tool_call_loop(
                     let decision = if mgr.is_non_interactive() {
                         match (channel_for_approval, approval_bridge) {
                             (Some(channel), Some(bridge)) => {
+                                tracing::info!(
+                                    tool = %tool_name,
+                                    channel = %channel_name,
+                                    "Sending approval request via channel"
+                                );
                                 let scope_key = crate::approval::approval_scope_key(
                                     channel_name,
                                     channel_reply_target.unwrap_or(channel_name),
                                     None,
                                 );
-                                mgr.prompt_channel(
+                                let resp = mgr.prompt_channel(
                                     &request,
                                     channel,
                                     channel_reply_target.unwrap_or(channel_name),
@@ -3430,9 +3435,23 @@ pub(crate) async fn run_tool_call_loop(
                                     bridge,
                                     &scope_key,
                                 )
-                                .await
+                                .await;
+                                tracing::info!(
+                                    tool = %tool_name,
+                                    decision = ?resp,
+                                    "Channel approval response"
+                                );
+                                resp
                             }
-                            _ => ApprovalResponse::No,
+                            _ => {
+                                tracing::warn!(
+                                    tool = %tool_name,
+                                    has_channel = channel_for_approval.is_some(),
+                                    has_bridge = approval_bridge.is_some(),
+                                    "Auto-denying tool: channel approval not available"
+                                );
+                                ApprovalResponse::No
+                            }
                         }
                     } else {
                         mgr.prompt_cli(&request)
