@@ -1529,6 +1529,7 @@ mod tests {
             device_registry: None,
             pending_pairings: None,
             path_prefix: String::new(),
+            channel_tx: None,
             canvas_store: crate::tools::canvas::CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,

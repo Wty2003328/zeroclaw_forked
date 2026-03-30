@@ -4637,7 +4637,10 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
-pub async fn start_channels(config: Config) -> Result<()> {
+pub async fn start_channels(
+    config: Config,
+    gateway_rx: Option<tokio::sync::mpsc::Receiver<traits::ChannelMessage>>,
+) -> Result<()> {
     let provider_name = resolved_default_provider(&config);
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
@@ -5000,7 +5003,21 @@ pub async fn start_channels(config: Config) -> Result<()> {
             max_backoff_secs,
         ));
     }
-    drop(tx); // Drop our copy so rx closes when all channels stop
+    // If the gateway is forwarding webhook messages into this loop, spawn a
+    // bridge task that reads from the gateway receiver and sends into our
+    // internal channel. We keep `tx` alive for the bridge; otherwise drop it
+    // so `rx` closes when all channel listeners stop.
+    if let Some(mut grx) = gateway_rx {
+        let bridge_tx = tx.clone();
+        handles.push(tokio::spawn(async move {
+            while let Some(msg) = grx.recv().await {
+                if bridge_tx.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+    drop(tx);
 
     let channels_by_name = Arc::new(
         channels
@@ -5130,10 +5147,15 @@ pub async fn start_channels(config: Config) -> Result<()> {
         },
         approval_manager: Arc::new(ApprovalManager::for_non_interactive(&config.autonomy)),
         channel_approval_bridge: if config.autonomy.enable_channel_approval {
+            tracing::info!(
+                timeout_secs = config.autonomy.channel_approval_timeout_secs,
+                "Channel approval bridge ENABLED"
+            );
             Some(Arc::new(ChannelApprovalBridge::new(
                 config.autonomy.channel_approval_timeout_secs,
             )))
         } else {
+            tracing::info!("Channel approval bridge DISABLED (enable_channel_approval = false)");
             None
         },
         activated_tools: ch_activated_handle,

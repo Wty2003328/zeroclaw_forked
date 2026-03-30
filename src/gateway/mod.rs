@@ -370,6 +370,11 @@ pub struct AppState {
     pub device_registry: Option<Arc<api_pairing::DeviceRegistry>>,
     /// Pending pairing request store
     pub pending_pairings: Option<Arc<api_pairing::PairingStore>>,
+    /// Sender for dispatching webhook messages to the channel processing loop.
+    /// When `Some`, webhook handlers (WeCom, WhatsApp, etc.) enqueue messages
+    /// here instead of using the simplified gateway chat path, so that channel
+    /// features (approval, history, tools) are available.
+    pub channel_tx: Option<tokio::sync::mpsc::Sender<crate::channels::traits::ChannelMessage>>,
     /// Shared canvas store for Live Canvas (A2UI) system
     pub canvas_store: CanvasStore,
     /// WebAuthn state for hardware key authentication (optional, requires `webauthn` feature)
@@ -379,7 +384,12 @@ pub struct AppState {
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
 #[allow(clippy::too_many_lines)]
-pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
+pub async fn run_gateway(
+    host: &str,
+    port: u16,
+    config: Config,
+    channel_tx: Option<tokio::sync::mpsc::Sender<crate::channels::traits::ChannelMessage>>,
+) -> Result<()> {
     // ── Security: refuse public bind without tunnel or explicit opt-in ──
     if is_public_bind(host) && config.tunnel.provider == "none" && !config.gateway.allow_public_bind
     {
@@ -876,6 +886,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         device_registry,
         pending_pairings,
         path_prefix: path_prefix.unwrap_or("").to_string(),
+        channel_tx,
         canvas_store,
         #[cfg(feature = "webauthn")]
         webauthn: if config.security.webauthn.enabled {
@@ -1980,59 +1991,80 @@ async fn handle_wecom_message(
         return (StatusCode::OK, "success".to_string());
     }
 
-    // WeCom requires a response within 5 seconds, so process asynchronously
-    let wecom = Arc::clone(wecom);
-    let mem = state.mem.clone();
-    let auto_save = state.auto_save;
-    let state_clone = state.clone();
+    // WeCom requires a response within 5 seconds, so process asynchronously.
+    // When a channel_tx is available, dispatch messages to the channel
+    // processing loop which provides approval flow, conversation history,
+    // and the full tool registry. Otherwise, fall back to the simplified
+    // gateway chat path.
+    let channel_tx = state.channel_tx.clone();
 
-    tokio::spawn(async move {
-        for msg in &messages {
-            tracing::info!(
-                "WeCom message from {}: {}",
-                msg.sender,
-                truncate_with_ellipsis(&msg.content, 50)
-            );
-
-            let session_id = sender_session_id("wecom", msg);
-
-            // Auto-save to memory
-            if auto_save && !memory::should_skip_autosave_content(&msg.content) {
-                let key = wecom_memory_key(msg);
-                let _ = mem
-                    .store(
-                        &key,
-                        &msg.content,
-                        MemoryCategory::Conversation,
-                        Some(&session_id),
-                    )
-                    .await;
-            }
-
-            // Call the LLM
-            match Box::pin(run_gateway_chat_with_tools(&state_clone, &msg.content, Some(&session_id)))
-                .await
-            {
-                Ok(response) => {
-                    if let Err(e) = wecom
-                        .send(&SendMessage::new(response, &msg.reply_target))
-                        .await
-                    {
-                        tracing::error!("Failed to send WeCom reply: {e}");
-                    }
+    if let Some(tx) = channel_tx {
+        tokio::spawn(async move {
+            for msg in messages {
+                tracing::info!(
+                    "WeCom message from {}: {} (→ channel loop)",
+                    msg.sender,
+                    truncate_with_ellipsis(&msg.content, 50)
+                );
+                if let Err(e) = tx.send(msg).await {
+                    tracing::error!("Failed to dispatch WeCom message to channel loop: {e}");
                 }
-                Err(e) => {
-                    tracing::error!("LLM error for WeCom message: {e:#}");
-                    let _ = wecom
-                        .send(&SendMessage::new(
-                            "Sorry, I couldn't process your message right now.",
-                            &msg.reply_target,
-                        ))
+            }
+        });
+    } else {
+        let wecom = Arc::clone(wecom);
+        let mem = state.mem.clone();
+        let auto_save = state.auto_save;
+        let state_clone = state.clone();
+
+        tokio::spawn(async move {
+            for msg in &messages {
+                tracing::info!(
+                    "WeCom message from {}: {} (gateway path)",
+                    msg.sender,
+                    truncate_with_ellipsis(&msg.content, 50)
+                );
+
+                let session_id = sender_session_id("wecom", msg);
+
+                // Auto-save to memory
+                if auto_save && !memory::should_skip_autosave_content(&msg.content) {
+                    let key = wecom_memory_key(msg);
+                    let _ = mem
+                        .store(
+                            &key,
+                            &msg.content,
+                            MemoryCategory::Conversation,
+                            Some(&session_id),
+                        )
                         .await;
                 }
-            }
+
+                // Call the LLM (no approval flow in this path)
+                match Box::pin(run_gateway_chat_with_tools(&state_clone, &msg.content, Some(&session_id)))
+                    .await
+                {
+                    Ok(response) => {
+                        if let Err(e) = wecom
+                            .send(&SendMessage::new(response, &msg.reply_target))
+                            .await
+                        {
+                            tracing::error!("Failed to send WeCom reply: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("LLM error for WeCom message: {e:#}");
+                        let _ = wecom
+                            .send(&SendMessage::new(
+                                "Sorry, I couldn't process your message right now.",
+                                &msg.reply_target,
+                            ))
+                            .await;
+                    }
+                }
         }
     });
+    }
 
     // Return success immediately (WeCom requires response within 5 seconds)
     (StatusCode::OK, "success".to_string())
@@ -2420,6 +2452,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -2481,6 +2514,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -2872,6 +2906,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -2947,6 +2982,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -3034,6 +3070,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -3093,6 +3130,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -3157,6 +3195,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -3226,6 +3265,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,
@@ -3291,6 +3331,7 @@ mod tests {
             session_backend: None,
             device_registry: None,
             pending_pairings: None,
+            channel_tx: None,
             canvas_store: CanvasStore::new(),
             #[cfg(feature = "webauthn")]
             webauthn: None,

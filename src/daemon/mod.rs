@@ -62,9 +62,22 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
 
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(config.clone())];
 
+    // Shared channel for routing webhook messages from the gateway into the
+    // channel processing loop (provides approval, history, and tool support).
+    // The sender lives in the gateway's AppState; the receiver is consumed by
+    // start_channels. We use Arc<Mutex> so the receiver can be taken once per
+    // channels restart cycle.
+    let (gateway_msg_tx, gateway_msg_rx) = if has_supervised_channels(&config) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<crate::channels::traits::ChannelMessage>(100);
+        (Some(tx), Some(std::sync::Arc::new(tokio::sync::Mutex::new(Some(rx)))))
+    } else {
+        (None, None)
+    };
+
     {
         let gateway_cfg = config.clone();
         let gateway_host = host.clone();
+        let channel_tx = gateway_msg_tx;
         handles.push(spawn_component_supervisor(
             "gateway",
             initial_backoff,
@@ -72,7 +85,8 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
             move || {
                 let cfg = gateway_cfg.clone();
                 let host = gateway_host.clone();
-                async move { Box::pin(crate::gateway::run_gateway(&host, port, cfg)).await }
+                let tx = channel_tx.clone();
+                async move { Box::pin(crate::gateway::run_gateway(&host, port, cfg, tx)).await }
             },
         ));
     }
@@ -80,13 +94,26 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     {
         if has_supervised_channels(&config) {
             let channels_cfg = config.clone();
+            let rx_holder = gateway_msg_rx;
             handles.push(spawn_component_supervisor(
                 "channels",
                 initial_backoff,
                 max_backoff,
                 move || {
                     let cfg = channels_cfg.clone();
-                    async move { Box::pin(crate::channels::start_channels(cfg)).await }
+                    let rx_ref = rx_holder.clone();
+                    async move {
+                        // Take the receiver on first start; subsequent restarts
+                        // won't have a receiver (gateway sends will error, which
+                        // is acceptable — the channel loop processes messages from
+                        // its own listeners instead).
+                        let rx = if let Some(ref holder) = rx_ref {
+                            holder.lock().await.take()
+                        } else {
+                            None
+                        };
+                        Box::pin(crate::channels::start_channels(cfg, rx)).await
+                    }
                 },
             ));
         } else {
