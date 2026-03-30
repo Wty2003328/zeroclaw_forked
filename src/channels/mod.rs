@@ -3572,7 +3572,9 @@ pub fn build_system_prompt_with_mode_and_autonomy(
         _ => {
             "- When in doubt, ask before acting externally.\n\
              - Respect the runtime autonomy policy: ask for approval only when the current runtime policy actually requires it.\n\
-             - If a tool or action is blocked by policy or unavailable, explain that concrete restriction instead of simulating an approval dialog.\n"
+             - ALWAYS attempt tool calls when the user requests an action — do NOT preemptively refuse or claim a tool is blocked. \
+             The runtime will handle approval automatically (including via channel messages). \
+             If a tool call is truly denied, you will receive an error — only then explain the restriction.\n"
         }
     });
     prompt.push('\n');
