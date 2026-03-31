@@ -129,15 +129,6 @@ impl ApprovalManager {
             return true;
         }
 
-        // Channel-driven shell execution is still guarded by the shell tool's
-        // own command allowlist and risk policy. Skipping the outer approval
-        // gate here lets low-risk allowlisted commands (e.g. `ls`) work in
-        // non-interactive channels without silently allowing medium/high-risk
-        // commands.
-        if self.non_interactive && tool_name == "shell" {
-            return false;
-        }
-
         // auto_approve skips the prompt.
         if self.auto_approve.contains("*") || self.auto_approve.contains(tool_name) {
             return false;
@@ -623,9 +614,10 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_shell_skips_outer_approval_by_default() {
+    fn non_interactive_shell_needs_approval_in_supervised() {
         let mgr = ApprovalManager::for_non_interactive(&AutonomyConfig::default());
-        assert!(!mgr.needs_approval("shell"));
+        // Shell requires channel-based approval like any other non-auto-approved tool.
+        assert!(mgr.needs_approval("shell"));
     }
 
     #[test]
