@@ -267,6 +267,39 @@ fn push_failure(
     ));
 }
 
+// ── Provider/model prefix parsing ────────────────────────────────────────
+// Model names in fallback chains may use `provider/model` notation
+// (e.g. `copilot/gemini-3.1-pro-preview`). The prefix is a routing hint:
+// when present, only the named provider is tried for that model, and the
+// bare model name (without prefix) is sent to the provider API.
+
+/// Split an optional `provider/model` prefix.
+///
+/// Returns `(Some("copilot"), "gemini-3.1-pro-preview")` for `"copilot/gemini-3.1-pro-preview"`,
+/// or `(None, "claude-sonnet-4-6")` for a plain model name.
+///
+/// Handles known model prefixes that contain slashes (e.g. `accounts/fireworks/...`)
+/// by only splitting on the first `/` when the prefix looks like a simple provider name.
+fn split_provider_hint(model: &str) -> (Option<&str>, &str) {
+    if let Some((prefix, rest)) = model.split_once('/') {
+        // Only treat as a provider hint if the prefix is a simple identifier
+        // (no dots, colons, or further slashes) and the rest is non-empty.
+        if !rest.is_empty()
+            && !prefix.is_empty()
+            && !prefix.contains('.')
+            && !prefix.contains(':')
+        {
+            return (Some(prefix), rest);
+        }
+    }
+    (None, model)
+}
+
+/// Strip the provider prefix from a model name, returning just the bare model.
+fn bare_model(model: &str) -> &str {
+    split_provider_hint(model).1
+}
+
 // ── Resilient Provider Wrapper ────────────────────────────────────────────
 // Three-level failover strategy: model chain → provider chain → retry loop.
 //   Outer loop:  iterate model fallback chain (original model first, then
@@ -318,12 +351,43 @@ impl ReliableProvider {
     }
 
     /// Build the list of models to try: [original, fallback1, fallback2, ...]
+    ///
+    /// Models may use `provider/model` notation (e.g. `copilot/gemini-3.1-pro-preview`).
+    /// The lookup key is tried both with and without the provider prefix.
     fn model_chain<'a>(&'a self, model: &'a str) -> Vec<&'a str> {
         let mut chain = vec![model];
-        if let Some(fallbacks) = self.model_fallbacks.get(model) {
+        // Try exact key first, then bare model name (without provider prefix).
+        let fallbacks = self.model_fallbacks.get(model).or_else(|| {
+            let (_, bare) = split_provider_hint(model);
+            if bare != model {
+                self.model_fallbacks.get(bare)
+            } else {
+                None
+            }
+        });
+        if let Some(fallbacks) = fallbacks {
             chain.extend(fallbacks.iter().map(|s| s.as_str()));
         }
         chain
+    }
+
+    /// Return the providers to try for a given model entry.
+    ///
+    /// If the model uses `provider/model` notation (e.g. `copilot/gpt-5.4`),
+    /// only providers whose name matches the prefix are returned. Otherwise
+    /// all providers are returned (the previous behaviour).
+    fn providers_for_model<'a>(
+        &'a self,
+        model: &str,
+    ) -> impl Iterator<Item = &'a (String, Box<dyn Provider>)> {
+        let (hint, _) = split_provider_hint(model);
+        let hint = hint.map(|s| s.to_string());
+        self.providers
+            .iter()
+            .filter(move |(name, _)| match &hint {
+                Some(h) => name == h,
+                None => true,
+            })
     }
 
     /// Advance to the next API key and return it, or None if no extra keys configured.
@@ -373,19 +437,20 @@ impl Provider for ReliableProvider {
         // immediately. On non-retryable error, break to next provider. On
         // retryable error, sleep with exponential backoff and retry.
         for current_model in &models {
-            for (provider_name, provider) in &self.providers {
+            let api_model = bare_model(current_model);
+            for (provider_name, provider) in self.providers_for_model(current_model) {
                 let mut backoff_ms = self.base_backoff_ms;
 
                 for attempt in 0..=self.max_retries {
                     match provider
-                        .chat_with_system(system_prompt, message, current_model, temperature)
+                        .chat_with_system(system_prompt, message, api_model, temperature)
                         .await
                     {
                         Ok(resp) => {
                             if attempt > 0 || *current_model != model {
                                 tracing::info!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt,
                                     original_model = model,
                                     "Provider recovered (failover/retry)"
@@ -447,7 +512,7 @@ impl Provider for ReliableProvider {
                             if non_retryable {
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     error = %error_detail,
                                     "Non-retryable error, moving on"
                                 );
@@ -458,7 +523,7 @@ impl Provider for ReliableProvider {
                                 let wait = self.compute_backoff(backoff_ms, &e);
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt = attempt + 1,
                                     backoff_ms = wait,
                                     reason = failure_reason,
@@ -506,19 +571,20 @@ impl Provider for ReliableProvider {
         let mut context_truncated = false;
 
         for current_model in &models {
-            for (provider_name, provider) in &self.providers {
+            let api_model = bare_model(current_model);
+            for (provider_name, provider) in self.providers_for_model(current_model) {
                 let mut backoff_ms = self.base_backoff_ms;
 
                 for attempt in 0..=self.max_retries {
                     match provider
-                        .chat_with_history(&effective_messages, current_model, temperature)
+                        .chat_with_history(&effective_messages, api_model, temperature)
                         .await
                     {
                         Ok(resp) => {
                             if attempt > 0 || *current_model != model || context_truncated {
                                 tracing::info!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt,
                                     original_model = model,
                                     context_truncated,
@@ -535,7 +601,7 @@ impl Provider for ReliableProvider {
                                     context_truncated = true;
                                     tracing::warn!(
                                         provider = provider_name,
-                                        model = *current_model,
+                                        model = api_model,
                                         dropped,
                                         remaining = effective_messages.len(),
                                         "Context window exceeded; truncated history and retrying"
@@ -595,7 +661,7 @@ impl Provider for ReliableProvider {
                             if non_retryable {
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     error = %error_detail,
                                     "Non-retryable error, moving on"
                                 );
@@ -606,7 +672,7 @@ impl Provider for ReliableProvider {
                                 let wait = self.compute_backoff(backoff_ms, &e);
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt = attempt + 1,
                                     backoff_ms = wait,
                                     reason = failure_reason,
@@ -660,19 +726,20 @@ impl Provider for ReliableProvider {
         let mut context_truncated = false;
 
         for current_model in &models {
-            for (provider_name, provider) in &self.providers {
+            let api_model = bare_model(current_model);
+            for (provider_name, provider) in self.providers_for_model(current_model) {
                 let mut backoff_ms = self.base_backoff_ms;
 
                 for attempt in 0..=self.max_retries {
                     match provider
-                        .chat_with_tools(&effective_messages, tools, current_model, temperature)
+                        .chat_with_tools(&effective_messages, tools, api_model, temperature)
                         .await
                     {
                         Ok(resp) => {
                             if attempt > 0 || *current_model != model || context_truncated {
                                 tracing::info!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt,
                                     original_model = model,
                                     context_truncated,
@@ -689,7 +756,7 @@ impl Provider for ReliableProvider {
                                     context_truncated = true;
                                     tracing::warn!(
                                         provider = provider_name,
-                                        model = *current_model,
+                                        model = api_model,
                                         dropped,
                                         remaining = effective_messages.len(),
                                         "Context window exceeded; truncated history and retrying"
@@ -749,7 +816,7 @@ impl Provider for ReliableProvider {
                             if non_retryable {
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     error = %error_detail,
                                     "Non-retryable error, moving on"
                                 );
@@ -760,7 +827,7 @@ impl Provider for ReliableProvider {
                                 let wait = self.compute_backoff(backoff_ms, &e);
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt = attempt + 1,
                                     backoff_ms = wait,
                                     reason = failure_reason,
@@ -776,7 +843,7 @@ impl Provider for ReliableProvider {
 
                 tracing::warn!(
                     provider = provider_name,
-                    model = *current_model,
+                    model = api_model,
                     "Exhausted retries, trying next provider/model"
                 );
             }
@@ -800,7 +867,8 @@ impl Provider for ReliableProvider {
         let mut context_truncated = false;
 
         for current_model in &models {
-            for (provider_name, provider) in &self.providers {
+            let api_model = bare_model(current_model);
+            for (provider_name, provider) in self.providers_for_model(current_model) {
                 let mut backoff_ms = self.base_backoff_ms;
 
                 for attempt in 0..=self.max_retries {
@@ -808,12 +876,12 @@ impl Provider for ReliableProvider {
                         messages: &effective_messages,
                         tools: request.tools,
                     };
-                    match provider.chat(req, current_model, temperature).await {
+                    match provider.chat(req, api_model, temperature).await {
                         Ok(resp) => {
                             if attempt > 0 || *current_model != model || context_truncated {
                                 tracing::info!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt,
                                     original_model = model,
                                     context_truncated,
@@ -830,7 +898,7 @@ impl Provider for ReliableProvider {
                                     context_truncated = true;
                                     tracing::warn!(
                                         provider = provider_name,
-                                        model = *current_model,
+                                        model = api_model,
                                         dropped,
                                         remaining = effective_messages.len(),
                                         "Context window exceeded; truncated history and retrying"
@@ -890,7 +958,7 @@ impl Provider for ReliableProvider {
                             if non_retryable {
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     error = %error_detail,
                                     "Non-retryable error, moving on"
                                 );
@@ -901,7 +969,7 @@ impl Provider for ReliableProvider {
                                 let wait = self.compute_backoff(backoff_ms, &e);
                                 tracing::warn!(
                                     provider = provider_name,
-                                    model = *current_model,
+                                    model = api_model,
                                     attempt = attempt + 1,
                                     backoff_ms = wait,
                                     reason = failure_reason,
@@ -917,7 +985,7 @@ impl Provider for ReliableProvider {
 
                 tracing::warn!(
                     provider = provider_name,
-                    model = *current_model,
+                    model = api_model,
                     "Exhausted retries, trying next provider/model"
                 );
             }
@@ -956,7 +1024,14 @@ impl Provider for ReliableProvider {
     ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
         let needs_tool_events = request.tools.is_some_and(|tools| !tools.is_empty());
 
-        for (provider_name, provider) in &self.providers {
+        let first_model = self
+            .model_chain(model)
+            .first()
+            .copied()
+            .unwrap_or(model);
+        let api_model_str = bare_model(first_model).to_string();
+
+        for (provider_name, provider) in self.providers_for_model(first_model) {
             if !provider.supports_streaming() || !options.enabled {
                 continue;
             }
@@ -967,12 +1042,7 @@ impl Provider for ReliableProvider {
 
             let provider_clone = provider_name.clone();
 
-            let current_model = self
-                .model_chain(model)
-                .first()
-                .copied()
-                .unwrap_or(model)
-                .to_string();
+            let current_model = api_model_str.clone();
 
             let req = ChatRequest {
                 messages: request.messages,
@@ -1021,7 +1091,10 @@ impl Provider for ReliableProvider {
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
         // Try each provider/model combination for streaming
         // For streaming, we use the first provider that supports it and has streaming enabled
-        for (provider_name, provider) in &self.providers {
+        let first_model = self.model_chain(model).first().copied().unwrap_or(model);
+        let api_model_str = bare_model(first_model).to_string();
+
+        for (provider_name, provider) in self.providers_for_model(first_model) {
             if !provider.supports_streaming() || !options.enabled {
                 continue;
             }
@@ -1029,11 +1102,7 @@ impl Provider for ReliableProvider {
             // Clone provider data for the stream
             let provider_clone = provider_name.clone();
 
-            // Try the first model in the chain for streaming
-            let current_model = match self.model_chain(model).first() {
-                Some(m) => m.to_string(),
-                None => model.to_string(),
-            };
+            let current_model = api_model_str.clone();
 
             // For streaming, we attempt once and propagate errors
             // The caller can retry the entire request if needed
@@ -1090,17 +1159,17 @@ impl Provider for ReliableProvider {
         // Try each provider/model combination for streaming with history.
         // Mirrors stream_chat_with_system but delegates to the underlying
         // provider's stream_chat_with_history, preserving the full conversation.
-        for (provider_name, provider) in &self.providers {
+        let first_model = self.model_chain(model).first().copied().unwrap_or(model);
+        let api_model_str = bare_model(first_model).to_string();
+
+        for (provider_name, provider) in self.providers_for_model(first_model) {
             if !provider.supports_streaming() || !options.enabled {
                 continue;
             }
 
             let provider_clone = provider_name.clone();
 
-            let current_model = match self.model_chain(model).first() {
-                Some(m) => m.to_string(),
-                None => model.to_string(),
-            };
+            let current_model = api_model_str.clone();
 
             let stream =
                 provider.stream_chat_with_history(messages, &current_model, temperature, options);
@@ -2813,5 +2882,102 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(stream.next().await.is_none());
+    }
+
+    // ── Provider/model prefix routing tests ──
+
+    #[test]
+    fn split_provider_hint_with_prefix() {
+        let (hint, model) = split_provider_hint("copilot/gemini-3.1-pro-preview");
+        assert_eq!(hint, Some("copilot"));
+        assert_eq!(model, "gemini-3.1-pro-preview");
+    }
+
+    #[test]
+    fn split_provider_hint_plain_model() {
+        let (hint, model) = split_provider_hint("claude-sonnet-4-6");
+        assert_eq!(hint, None);
+        assert_eq!(model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn split_provider_hint_preserves_complex_paths() {
+        // Model names with dots/colons in the prefix should not be split
+        let (hint, model) = split_provider_hint("accounts/fireworks/models/llama-v3");
+        // "accounts" is a simple identifier, so it will be treated as a hint
+        assert_eq!(hint, Some("accounts"));
+        assert_eq!(model, "fireworks/models/llama-v3");
+    }
+
+    #[test]
+    fn bare_model_strips_prefix() {
+        assert_eq!(bare_model("copilot/gpt-5.4"), "gpt-5.4");
+        assert_eq!(bare_model("anthropic/claude-opus-4-6"), "claude-opus-4-6");
+        assert_eq!(bare_model("claude-sonnet-4-6"), "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn model_chain_resolves_prefixed_key() {
+        let mut fallbacks = HashMap::new();
+        fallbacks.insert(
+            "gemini-3.1-pro-preview".to_string(),
+            vec![
+                "anthropic/claude-opus-4-6".to_string(),
+                "copilot/gpt-5.4".to_string(),
+            ],
+        );
+        let provider = ReliableProvider::new(vec![], 0, 100).with_model_fallbacks(fallbacks);
+
+        // Lookup with provider prefix should still find the bare key
+        let chain = provider.model_chain("copilot/gemini-3.1-pro-preview");
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0], "copilot/gemini-3.1-pro-preview");
+        assert_eq!(chain[1], "anthropic/claude-opus-4-6");
+        assert_eq!(chain[2], "copilot/gpt-5.4");
+    }
+
+    #[tokio::test]
+    async fn provider_hint_routes_to_correct_provider() {
+        // Set up two providers: "anthropic" and "copilot"
+        let anthropic_calls = Arc::new(AtomicUsize::new(0));
+        let copilot_calls = Arc::new(AtomicUsize::new(0));
+
+        let anthropic_mock = MockProvider {
+            calls: Arc::clone(&anthropic_calls),
+            fail_until_attempt: 0, // always succeed
+            response: "anthropic ok",
+            error: "",
+        };
+        let copilot_mock = MockProvider {
+            calls: Arc::clone(&copilot_calls),
+            fail_until_attempt: 0,
+            response: "copilot ok",
+            error: "",
+        };
+
+        let mut fallbacks = HashMap::new();
+        fallbacks.insert(
+            "gemini-3.1-pro-preview".to_string(),
+            vec!["anthropic/claude-opus-4-6".to_string()],
+        );
+
+        let provider = ReliableProvider::new(
+            vec![
+                ("anthropic".into(), Box::new(anthropic_mock) as Box<dyn Provider>),
+                ("copilot".into(), Box::new(copilot_mock) as Box<dyn Provider>),
+            ],
+            0,
+            100,
+        )
+        .with_model_fallbacks(fallbacks);
+
+        // Request with copilot prefix should only go to copilot provider
+        let result = provider
+            .chat_with_system(None, "hello", "copilot/gemini-3.1-pro-preview", 0.0)
+            .await
+            .unwrap();
+        assert_eq!(result, "copilot ok");
+        assert_eq!(anthropic_calls.load(Ordering::SeqCst), 0, "anthropic should not be called");
+        assert_eq!(copilot_calls.load(Ordering::SeqCst), 1, "copilot should be called once");
     }
 }
