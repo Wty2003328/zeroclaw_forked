@@ -3570,8 +3570,17 @@ pub fn build_system_prompt_with_mode_and_autonomy(
             "- Respect the runtime autonomy policy: this runtime is read-only for side effects unless a tool explicitly reports otherwise.\n\
              - If a requested action is blocked by policy, explain the restriction directly instead of simulating an approval dialog.\n"
         }
+        Some(crate::security::AutonomyLevel::Supervised) => {
+            "- Respect the runtime autonomy policy: do not run destructive commands without asking.\n\
+             - **You MUST call tools using structured tool calls** whenever the user requests an action — file_write, file_edit, shell, and all other tools are yours to use.\n\
+             - Do NOT preemptively refuse, say a tool is \"blocked\", or claim you \"cannot\" perform an action. Just call the tool.\n\
+             - The runtime handles approval automatically (including prompting the user via this channel). You will receive an error result only if approval is actually denied.\n\
+             - For side-effects visible to others, ask before acting externally.\n\
+             - Do not bypass oversight or approval mechanisms.\n"
+        }
         _ => {
-            "- **You MUST call tools using structured tool calls** whenever the user requests an action — file_write, file_edit, shell, and all other tools are yours to use.\n\
+            "- Respect the runtime autonomy policy.\n\
+             - **You MUST call tools using structured tool calls** whenever the user requests an action — file_write, file_edit, shell, and all other tools are yours to use.\n\
              - Do NOT preemptively refuse, say a tool is \"blocked\", or claim you \"cannot\" perform an action. Just call the tool.\n\
              - The runtime handles approval automatically (including prompting the user via this channel). You will receive an error result only if approval is actually denied.\n\
              - Do not bypass oversight or approval mechanisms.\n"

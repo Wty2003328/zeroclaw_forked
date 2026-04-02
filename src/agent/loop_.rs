@@ -3444,13 +3444,15 @@ pub(crate) async fn run_tool_call_loop(
                                 resp
                             }
                             _ => {
-                                tracing::warn!(
+                                // No approval channel available — auto-approve
+                                // rather than silently denying every tool call.
+                                // Tools enforce their own security constraints
+                                // (allowed_commands, forbidden_paths, etc.).
+                                tracing::info!(
                                     tool = %tool_name,
-                                    has_channel = channel_for_approval.is_some(),
-                                    has_bridge = approval_bridge.is_some(),
-                                    "Auto-denying tool: channel approval not available"
+                                    "Auto-approving in non-interactive mode (no approval channel)"
                                 );
-                                ApprovalResponse::No
+                                ApprovalResponse::Yes
                             }
                         }
                     } else {
