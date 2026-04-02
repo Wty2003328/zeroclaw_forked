@@ -666,13 +666,14 @@ impl Agent {
 
         // Fallback: auto-classify by complexity when no rule matched.
         if let Some(ref ac) = self.config.auto_classify {
-            let tier = super::eval::estimate_complexity(user_message);
+            let (tier, score) = super::eval::estimate_complexity_scored(user_message);
             if let Some(hint) = ac.hint_for(tier) {
                 if self.available_hints.contains(&hint.to_string()) {
                     tracing::info!(
                         target: "query_classification",
                         hint = hint,
                         complexity = ?tier,
+                        score = format!("{score:.3}").as_str(),
                         message_length = user_message.len(),
                         "Auto-classified by complexity"
                     );

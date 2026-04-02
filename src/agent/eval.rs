@@ -15,18 +15,35 @@ pub enum ComplexityTier {
     Complex,
 }
 
-/// Heuristic keywords that signal reasoning complexity.
+// ── Signal-based complexity scoring ─────────────────────────────
+
+/// Multi-signal complexity features extracted in a single pass.
+#[derive(Debug, Default)]
+struct ComplexitySignals {
+    word_count: usize,
+    line_count: usize,
+    sentence_count: usize,
+    question_marks: usize,
+    code_fences: usize,
+    backtick_spans: usize,
+    indented_lines: usize,
+    reasoning_keywords: usize,
+    technical_keywords: usize,
+    action_keywords: usize,
+    list_markers: usize,
+    url_count: usize,
+    file_path_indicators: usize,
+    has_multi_paragraph: bool,
+    max_indent_depth: usize,
+}
+
+/// Reasoning-heavy phrases (case-insensitive substring match).
 const REASONING_KEYWORDS: &[&str] = &[
     "explain",
     "why",
     "analyze",
     "compare",
     "design",
-    "implement",
-    "refactor",
-    "debug",
-    "optimize",
-    "architecture",
     "trade-off",
     "tradeoff",
     "reasoning",
@@ -35,35 +52,289 @@ const REASONING_KEYWORDS: &[&str] = &[
     "evaluate",
     "critique",
     "pros and cons",
+    "what if",
+    "how does",
+    "how do",
+    "how would",
+    "root cause",
+    "diagnose",
+    "investigate",
 ];
+
+/// Technical / code-related keywords.
+const TECHNICAL_KEYWORDS: &[&str] = &[
+    "function",
+    "class",
+    "struct",
+    "module",
+    "api",
+    "database",
+    "query",
+    "schema",
+    "deploy",
+    "pipeline",
+    "endpoint",
+    "migration",
+    "docker",
+    "kubernetes",
+    "terraform",
+    "async",
+    "thread",
+    "mutex",
+    "trait",
+    "generic",
+    "lifetime",
+    "borrow",
+    "pointer",
+    "algorithm",
+    "recursion",
+    "complexity",
+    "sql",
+    "regex",
+    "json",
+    "yaml",
+    "toml",
+    "config",
+    "server",
+    "client",
+    "socket",
+    "http",
+    "grpc",
+    "webhook",
+    "oauth",
+    "token",
+    "encrypt",
+    "hash",
+    "certificate",
+];
+
+/// Action verbs that signal agentic / write-heavy tasks.
+const ACTION_KEYWORDS: &[&str] = &[
+    "implement",
+    "refactor",
+    "debug",
+    "optimize",
+    "fix",
+    "rewrite",
+    "migrate",
+    "build",
+    "create",
+    "add",
+    "remove",
+    "delete",
+    "update",
+    "change",
+    "modify",
+    "set up",
+    "configure",
+    "install",
+    "upgrade",
+    "patch",
+    "deploy",
+    "ship",
+    "test",
+    "benchmark",
+    "profile",
+    "audit",
+    "review",
+    "architect",
+];
+
+/// Extract all complexity signals from a message in ~one pass.
+fn extract_signals(message: &str) -> ComplexitySignals {
+    let mut s = ComplexitySignals::default();
+    let lower = message.to_lowercase();
+
+    // ── Line-level signals ──────────────────────────────────────
+    let mut consecutive_blanks = 0u32;
+    for line in message.lines() {
+        s.line_count += 1;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            consecutive_blanks += 1;
+            if consecutive_blanks >= 1 {
+                s.has_multi_paragraph = true;
+            }
+            continue;
+        }
+        consecutive_blanks = 0;
+
+        // Indentation depth (leading spaces / 4 or tabs)
+        let leading_spaces = line.len() - line.trim_start().len();
+        let indent = if line.starts_with('\t') {
+            line.bytes().take_while(|&b| b == b'\t').count()
+        } else {
+            leading_spaces / 4
+        };
+        if indent > 0 {
+            s.indented_lines += 1;
+            if indent > s.max_indent_depth {
+                s.max_indent_depth = indent;
+            }
+        }
+
+        // List markers: "- ", "* ", "1. ", "2. ", etc.
+        if trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed
+                .bytes()
+                .next()
+                .map_or(false, |b| b.is_ascii_digit())
+                && trimmed.contains(". ")
+        {
+            s.list_markers += 1;
+        }
+    }
+
+    // ── Character / word-level signals ──────────────────────────
+    let mut in_word = false;
+    for ch in message.chars() {
+        if ch.is_whitespace() {
+            if in_word {
+                s.word_count += 1;
+                in_word = false;
+            }
+        } else {
+            in_word = true;
+        }
+        match ch {
+            '?' => s.question_marks += 1,
+            '.' | '!' => s.sentence_count += 1,
+            _ => {}
+        }
+    }
+    if in_word {
+        s.word_count += 1;
+    }
+    // At least 1 sentence if there are words
+    if s.word_count > 0 && s.sentence_count == 0 {
+        s.sentence_count = 1;
+    }
+
+    // ── Code indicators ─────────────────────────────────────────
+    s.code_fences = message.matches("```").count() / 2; // pairs
+    // Inline backtick spans (not fences): count single ` not part of ```
+    let single_bt = message.matches('`').count();
+    let triple_bt = message.matches("```").count() * 3;
+    s.backtick_spans = single_bt.saturating_sub(triple_bt) / 2;
+
+    // ── Keyword scanning (on lowered text) ──────────────────────
+    for kw in REASONING_KEYWORDS {
+        if lower.contains(kw) {
+            s.reasoning_keywords += 1;
+        }
+    }
+    for kw in TECHNICAL_KEYWORDS {
+        if lower.contains(kw) {
+            s.technical_keywords += 1;
+        }
+    }
+    for kw in ACTION_KEYWORDS {
+        if lower.contains(kw) {
+            s.action_keywords += 1;
+        }
+    }
+
+    // ── URL & file path detection ───────────────────────────────
+    for word in message.split_whitespace() {
+        if word.starts_with("http://") || word.starts_with("https://") {
+            s.url_count += 1;
+        }
+        // File path heuristic: contains / or \ with an extension
+        if (word.contains('/') || word.contains('\\'))
+            && (word.contains('.') || word.ends_with('/'))
+            && !word.starts_with("http")
+        {
+            s.file_path_indicators += 1;
+        }
+    }
+
+    s
+}
+
+/// Compute a 0.0–1.0 complexity score from extracted signals.
+///
+/// Weight budget (sums to 1.0):
+///   Length 0.20 | Structure 0.10 | Code 0.20 | Reasoning 0.20
+///   Technical 0.15 | Action 0.10 | Context 0.05
+fn compute_complexity_score(s: &ComplexitySignals) -> f64 {
+    let mut score = 0.0_f64;
+
+    // ── Length signal (0–0.20) ───────────────────────────────────
+    // Scale: 1 word ≈ 0.01, 10 words ≈ 0.10, 20+ words saturates.
+    score += (s.word_count as f64 / 20.0).min(1.0) * 0.20;
+
+    // ── Structure signal (0–0.10) ───────────────────────────────
+    let structure = (s.line_count as f64 / 6.0).min(1.0) * 0.4
+        + if s.has_multi_paragraph { 0.3 } else { 0.0 }
+        + (s.list_markers as f64 / 3.0).min(1.0) * 0.3;
+    score += structure.min(1.0) * 0.10;
+
+    // ── Code signal (0–0.20) ────────────────────────────────────
+    let code = if s.code_fences > 0 {
+        1.0
+    } else {
+        let backtick_signal = (s.backtick_spans as f64 / 2.0).min(1.0) * 0.5;
+        let indent_signal = (s.indented_lines as f64 / 3.0).min(1.0) * 0.3;
+        let path_signal = (s.file_path_indicators as f64 / 2.0).min(1.0) * 0.2;
+        backtick_signal + indent_signal + path_signal
+    };
+    score += code.min(1.0) * 0.20;
+
+    // ── Reasoning keyword signal (0–0.20) ───────────────────────
+    // 1 keyword ≈ 0.10, 2+ saturates.
+    score += (s.reasoning_keywords as f64 / 2.0).min(1.0) * 0.20;
+
+    // ── Technical keyword signal (0–0.15) ───────────────────────
+    // 1 keyword ≈ 0.05, 3+ saturates.
+    score += (s.technical_keywords as f64 / 3.0).min(1.0) * 0.15;
+
+    // ── Action keyword signal (0–0.10) ──────────────────────────
+    score += (s.action_keywords as f64 / 2.0).min(1.0) * 0.10;
+
+    // ── Contextual extras (0–0.05) ──────────────────────────────
+    let extras = (s.url_count as f64 / 2.0).min(1.0) * 0.4
+        + (s.question_marks as f64 / 2.0).min(1.0) * 0.3
+        + (s.sentence_count as f64 / 4.0).min(1.0) * 0.3;
+    score += extras.min(1.0) * 0.05;
+
+    // ── Strong-signal floor ─────────────────────────────────────
+    // Certain signals are decisive regardless of message length:
+    // code fences or 2+ reasoning keywords guarantee at least Standard+.
+    if s.code_fences > 0 || s.reasoning_keywords >= 2 {
+        score = score.max(0.40);
+    }
+
+    score.clamp(0.0, 1.0)
+}
 
 /// Estimate the complexity of a user message without an LLM call.
 ///
-/// Rules (applied in order):
-/// - **Complex**: message > 200 chars, OR contains a code fence, OR ≥ 2
-///   reasoning keywords.
-/// - **Simple**: message < 50 chars AND no reasoning keywords.
-/// - **Standard**: everything else.
+/// Uses a weighted multi-signal scorer across length, structure, code
+/// indicators, reasoning/technical/action keywords, and contextual
+/// features (URLs, questions, file paths). All computed in a single
+/// pass — sub-millisecond even on constrained hardware.
+///
+/// Score thresholds: < 0.10 → Simple, 0.10–0.35 → Standard, > 0.35 → Complex.
 pub fn estimate_complexity(message: &str) -> ComplexityTier {
-    let lower = message.to_lowercase();
-    let len = message.len();
+    score_to_tier(compute_complexity_score(&extract_signals(message)))
+}
 
-    let keyword_count = REASONING_KEYWORDS
-        .iter()
-        .filter(|kw| lower.contains(**kw))
-        .count();
+/// Like [`estimate_complexity`] but also returns the raw score for observability.
+pub fn estimate_complexity_scored(message: &str) -> (ComplexityTier, f64) {
+    let score = compute_complexity_score(&extract_signals(message));
+    (score_to_tier(score), score)
+}
 
-    let has_code_fence = message.contains("```");
-
-    if len > 200 || has_code_fence || keyword_count >= 2 {
-        return ComplexityTier::Complex;
+fn score_to_tier(score: f64) -> ComplexityTier {
+    if score > 0.35 {
+        ComplexityTier::Complex
+    } else if score < 0.10 {
+        ComplexityTier::Simple
+    } else {
+        ComplexityTier::Standard
     }
-
-    if len < 50 && keyword_count == 0 {
-        return ComplexityTier::Simple;
-    }
-
-    ComplexityTier::Standard
 }
 
 // ── Auto-classify config ────────────────────────────────────────
@@ -296,12 +567,13 @@ mod tests {
         assert_eq!(estimate_complexity("hi"), ComplexityTier::Simple);
         assert_eq!(estimate_complexity("hello"), ComplexityTier::Simple);
         assert_eq!(estimate_complexity("yes"), ComplexityTier::Simple);
+        assert_eq!(estimate_complexity("ok"), ComplexityTier::Simple);
+        assert_eq!(estimate_complexity("thanks"), ComplexityTier::Simple);
     }
 
     #[test]
-    fn complex_long_message() {
-        let long = "a".repeat(201);
-        assert_eq!(estimate_complexity(&long), ComplexityTier::Complex);
+    fn simple_short_question() {
+        assert_eq!(estimate_complexity("what time is it?"), ComplexityTier::Simple);
     }
 
     #[test]
@@ -317,17 +589,73 @@ mod tests {
     }
 
     #[test]
+    fn complex_long_structured_request() {
+        let msg = "I need you to implement a new authentication middleware that:\n\
+                   - Validates JWT tokens from the OAuth provider\n\
+                   - Checks the database for session validity\n\
+                   - Handles token refresh when expired\n\
+                   - Returns proper 401/403 error responses\n\n\
+                   The current code in `src/auth/mod.rs` needs refactoring.";
+        assert_eq!(estimate_complexity(msg), ComplexityTier::Complex);
+    }
+
+    #[test]
+    fn complex_code_with_backticks_and_paths() {
+        let msg = "The `parse_config()` function in src/config/schema.rs is returning \
+                   None when the `api_key` field has shell expansion like `${API_KEY}`. \
+                   Debug this and fix the root cause.";
+        assert_eq!(estimate_complexity(msg), ComplexityTier::Complex);
+    }
+
+    #[test]
     fn standard_medium_message() {
-        // 50+ chars but no code fence, < 2 reasoning keywords
-        let msg = "Can you help me find a good restaurant in this area please?";
+        let msg = "Can you help me find a good restaurant nearby?";
         assert_eq!(estimate_complexity(msg), ComplexityTier::Standard);
     }
 
     #[test]
     fn standard_short_with_one_keyword() {
-        // < 50 chars but has 1 reasoning keyword → still not Simple
         let msg = "explain this";
         assert_eq!(estimate_complexity(msg), ComplexityTier::Standard);
+    }
+
+    #[test]
+    fn standard_moderate_question() {
+        let msg = "What is the difference between TCP and UDP and when should I use each?";
+        assert_eq!(estimate_complexity(msg), ComplexityTier::Standard);
+    }
+
+    #[test]
+    fn scored_returns_score_with_tier() {
+        let (tier, score) = estimate_complexity_scored("hi");
+        assert_eq!(tier, ComplexityTier::Simple);
+        assert!(score < 0.10, "simple message score {score} should be < 0.10");
+
+        let (tier, score) = estimate_complexity_scored(
+            "Refactor the authentication module to use async traits and implement \
+             proper error handling with the `thiserror` crate. The current code in \
+             `src/auth/mod.rs` has several issues:\n\
+             - No timeout on token validation\n\
+             - Panics on malformed JWTs\n\
+             - Missing rate limiting",
+        );
+        assert_eq!(tier, ComplexityTier::Complex);
+        assert!(score > 0.35, "complex message score {score} should be > 0.35");
+    }
+
+    #[test]
+    fn signals_detect_urls_and_paths() {
+        let msg = "Check https://api.example.com/health and compare with src/gateway/mod.rs";
+        let signals = extract_signals(msg);
+        assert!(signals.url_count >= 1);
+        assert!(signals.file_path_indicators >= 1);
+    }
+
+    #[test]
+    fn signals_detect_list_markers() {
+        let msg = "Do these things:\n- first\n- second\n- third";
+        let signals = extract_signals(msg);
+        assert!(signals.list_markers >= 3);
     }
 
     // ── auto_classify ───────────────────────────────────────────
