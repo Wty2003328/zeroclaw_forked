@@ -236,10 +236,17 @@ async fn run_agent_job(
     let prefixed_prompt = format!("[cron:{} {name}] {prompt}", job.id);
     let model_override = job.model.clone();
 
+    // Cron jobs run in isolated, short-lived sessions where context window
+    // savings from deferred tool loading are negligible. Disabling deferred
+    // tools ensures all tools are immediately available, avoiding extra LLM
+    // round-trips for tool_search discovery — critical for metered providers.
+    let mut cron_config = config.clone();
+    cron_config.runtime.deferred_builtin_tools = false;
+
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
             Box::pin(crate::agent::run(
-                config.clone(),
+                cron_config,
                 Some(prefixed_prompt),
                 None,
                 model_override,
