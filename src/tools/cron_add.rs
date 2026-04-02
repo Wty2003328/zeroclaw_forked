@@ -128,7 +128,7 @@ impl Tool for CronAddTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model override for agent jobs, e.g. 'x-ai/grok-4-1-fast'"
+                    "description": "Model for agent jobs, e.g. 'copilot/gpt-5-mini'. Defaults to the system default model if omitted."
                 },
                 "allowed_tools": {
                     "type": "array",
@@ -309,10 +309,15 @@ impl Tool for CronAddTool {
                     None => SessionTarget::Isolated,
                 };
 
+                // Use the explicitly provided model, or fall back to the
+                // config default so that new agent jobs always record a
+                // concrete model instead of inheriting whatever the runtime
+                // default happens to be at execution time.
                 let model = args
                     .get("model")
                     .and_then(serde_json::Value::as_str)
-                    .map(str::to_string);
+                    .map(str::to_string)
+                    .or_else(|| self.config.default_model.clone());
                 let allowed_tools = match args.get("allowed_tools") {
                     Some(v) => match serde_json::from_value::<Vec<String>>(v.clone()) {
                         Ok(v) => {
