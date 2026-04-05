@@ -3283,11 +3283,7 @@ async fn run_message_dispatch_loop(
         // channel-based approval request. If so, resolve it and skip normal
         // processing — the message is consumed by the approval bridge.
         if let Some(ref bridge) = ctx.channel_approval_bridge {
-            let scope_key = approval_scope_key(
-                &msg.channel,
-                &msg.sender,
-                msg.thread_ts.as_deref(),
-            );
+            let scope_key = approval_scope_key(&msg.channel, &msg.sender, msg.thread_ts.as_deref());
             if bridge.try_resolve(&scope_key, &msg.content) {
                 tracing::debug!(
                     channel = %msg.channel,
@@ -4771,10 +4767,9 @@ pub async fn start_channels(
                     );
                     let deferred_registry =
                         crate::tools::DeferredToolRegistry::mcp_only(deferred_set);
-                    deferred_section =
-                        crate::tools::deferred_builtin::build_deferred_tools_section(
-                            &deferred_registry,
-                        );
+                    deferred_section = crate::tools::deferred_builtin::build_deferred_tools_section(
+                        &deferred_registry,
+                    );
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         crate::tools::ActivatedToolSet::new(),
                     ));

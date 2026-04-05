@@ -79,12 +79,22 @@ impl PulseDatabase {
         let url = url.to_string();
         tokio::task::spawn_blocking(move || -> Result<bool> {
             let c = conn.lock().unwrap();
-            let count: i64 = c.query_row("SELECT COUNT(*) FROM items WHERE url=?1", params![url], |r| r.get(0))?;
+            let count: i64 = c.query_row(
+                "SELECT COUNT(*) FROM items WHERE url=?1",
+                params![url],
+                |r| r.get(0),
+            )?;
             Ok(count > 0)
-        }).await?
+        })
+        .await?
     }
 
-    pub async fn get_feed(&self, limit: u32, offset: u32, source: Option<&str>) -> Result<Vec<FeedItem>> {
+    pub async fn get_feed(
+        &self,
+        limit: u32,
+        offset: u32,
+        source: Option<&str>,
+    ) -> Result<Vec<FeedItem>> {
         let conn = self.conn.clone();
         let source = source.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || -> Result<Vec<FeedItem>> {
@@ -110,20 +120,33 @@ impl PulseDatabase {
         }).await?
     }
 
-    pub async fn get_digest(&self, limit: u32) -> Result<Vec<FeedItem>> { self.get_feed(limit, 0, None).await }
+    pub async fn get_digest(&self, limit: u32) -> Result<Vec<FeedItem>> {
+        self.get_feed(limit, 0, None).await
+    }
 
     pub async fn start_collector_run(&self, collector_id: &str) -> Result<String> {
-        let id = Uuid::new_v4().to_string(); let now = Utc::now().to_rfc3339();
-        let conn = self.conn.clone(); let cid = collector_id.to_string(); let id2 = id.clone();
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.clone();
+        let cid = collector_id.to_string();
+        let id2 = id.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("INSERT INTO collector_runs (id,collector_id,started_at,status) VALUES (?1,?2,?3,'running')", params![id2,cid,now])?; Ok(())
         }).await??;
         Ok(id)
     }
 
-    pub async fn finish_collector_run(&self, run_id: &str, items_count: u32, error: Option<&str>) -> Result<()> {
-        let now = Utc::now().to_rfc3339(); let status = if error.is_some() {"error"} else {"success"};
-        let conn = self.conn.clone(); let rid = run_id.to_string(); let err = error.map(|s|s.to_string());
+    pub async fn finish_collector_run(
+        &self,
+        run_id: &str,
+        items_count: u32,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let status = if error.is_some() { "error" } else { "success" };
+        let conn = self.conn.clone();
+        let rid = run_id.to_string();
+        let err = error.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("UPDATE collector_runs SET finished_at=?1,items_count=?2,status=?3,error=?4 WHERE id=?5", params![now,items_count,status,err,rid])?; Ok(())
         }).await??;
@@ -146,14 +169,26 @@ impl PulseDatabase {
     }
 
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.clone(); let key = key.to_string();
+        let conn = self.conn.clone();
+        let key = key.to_string();
         tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-            Ok(conn.lock().unwrap().query_row("SELECT value FROM app_settings WHERE key=?1", params![key], |r| r.get(0)).ok())
-        }).await?
+            Ok(conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key=?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .ok())
+        })
+        .await?
     }
 
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.clone(); let k = key.to_string(); let v = value.to_string();
+        let conn = self.conn.clone();
+        let k = key.to_string();
+        let v = value.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("INSERT INTO app_settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![k,v])?; Ok(())
         }).await??;
@@ -165,9 +200,13 @@ impl PulseDatabase {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
             let c = conn.lock().unwrap();
             let mut stmt = c.prepare("SELECT key,value FROM app_settings")?;
-            let rows: Vec<_> = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?)))?.filter_map(|r| r.ok()).collect();
+            let rows: Vec<_> = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok(rows)
-        }).await?
+        })
+        .await?
     }
 
     pub async fn get_all_collector_intervals(&self) -> Result<Vec<(String, u64)>> {
@@ -175,13 +214,20 @@ impl PulseDatabase {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, u64)>> {
             let c = conn.lock().unwrap();
             let mut stmt = c.prepare("SELECT id,interval_secs FROM collector_settings")?;
-            let rows: Vec<_> = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as u64)))?.filter_map(|r| r.ok()).collect();
+            let rows: Vec<_> = stmt
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok(rows)
-        }).await?
+        })
+        .await?
     }
 
     pub async fn set_collector_interval(&self, id: &str, secs: u64) -> Result<()> {
-        let conn = self.conn.clone(); let id = id.to_string();
+        let conn = self.conn.clone();
+        let id = id.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("INSERT INTO collector_settings (id,interval_secs) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET interval_secs=excluded.interval_secs", params![id, secs as i64])?; Ok(())
         }).await??;
@@ -204,7 +250,8 @@ impl PulseDatabase {
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<ProviderSetting>> {
-        let conn = self.conn.clone(); let id = id.to_string();
+        let conn = self.conn.clone();
+        let id = id.to_string();
         tokio::task::spawn_blocking(move || -> Result<Option<ProviderSetting>> {
             Ok(conn.lock().unwrap().query_row("SELECT id,display_name,api_key,model,endpoint,enabled,is_active,extra_config,created_at,updated_at FROM provider_settings WHERE id=?1", params![id], |r| Ok(ProviderSetting {
                 id: r.get(0)?, display_name: r.get(1)?, api_key: r.get(2)?, model: r.get(3)?, endpoint: r.get(4)?,
@@ -216,8 +263,10 @@ impl PulseDatabase {
     }
 
     pub async fn upsert_provider(&self, s: &ProviderSetting) -> Result<()> {
-        let now = Utc::now().to_rfc3339(); let extra = serde_json::to_string(&s.extra_config)?;
-        let s = s.clone(); let conn = self.conn.clone();
+        let now = Utc::now().to_rfc3339();
+        let extra = serde_json::to_string(&s.extra_config)?;
+        let s = s.clone();
+        let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("INSERT INTO provider_settings (id,display_name,api_key,model,endpoint,enabled,is_active,extra_config,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, api_key=COALESCE(excluded.api_key, provider_settings.api_key), model=excluded.model, endpoint=excluded.endpoint, enabled=excluded.enabled, is_active=excluded.is_active, extra_config=excluded.extra_config, updated_at=excluded.updated_at",
                 params![s.id, s.display_name, s.api_key, s.model, s.endpoint, s.enabled, s.is_active, extra, now, now])?; Ok(())
@@ -226,7 +275,9 @@ impl PulseDatabase {
     }
 
     pub async fn delete_provider_key(&self, id: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339(); let conn = self.conn.clone(); let id = id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.clone();
+        let id = id.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("UPDATE provider_settings SET api_key=NULL,enabled=0,is_active=0,updated_at=?1 WHERE id=?2", params![now,id])?; Ok(())
         }).await??;
@@ -234,13 +285,22 @@ impl PulseDatabase {
     }
 
     pub async fn set_active_provider(&self, id: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339(); let conn = self.conn.clone(); let id = id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.clone();
+        let id = id.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let c = conn.lock().unwrap();
-            c.execute("UPDATE provider_settings SET is_active=0,updated_at=?1", params![now])?;
-            c.execute("UPDATE provider_settings SET is_active=1,enabled=1,updated_at=?1 WHERE id=?2", params![now,id])?;
+            c.execute(
+                "UPDATE provider_settings SET is_active=0,updated_at=?1",
+                params![now],
+            )?;
+            c.execute(
+                "UPDATE provider_settings SET is_active=1,enabled=1,updated_at=?1 WHERE id=?2",
+                params![now, id],
+            )?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -249,46 +309,93 @@ impl PulseDatabase {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
             let c = conn.lock().unwrap();
             let mut stmt = c.prepare("SELECT name,url FROM user_feeds ORDER BY name")?;
-            let rows: Vec<_> = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?)))?.filter_map(|r| r.ok()).collect();
+            let rows: Vec<_> = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok(rows)
-        }).await?
+        })
+        .await?
     }
 
     pub async fn add_user_feed(&self, name: &str, url: &str) -> Result<()> {
-        let conn = self.conn.clone(); let n = name.to_string(); let u = url.to_string();
+        let conn = self.conn.clone();
+        let n = name.to_string();
+        let u = url.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            conn.lock().unwrap().execute("INSERT OR REPLACE INTO user_feeds (name,url) VALUES (?1,?2)", params![n,u])?; Ok(())
-        }).await??; Ok(())
+            conn.lock().unwrap().execute(
+                "INSERT OR REPLACE INTO user_feeds (name,url) VALUES (?1,?2)",
+                params![n, u],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
     }
 
     pub async fn remove_user_feed(&self, url: &str) -> Result<()> {
-        let conn = self.conn.clone(); let u = url.to_string();
+        let conn = self.conn.clone();
+        let u = url.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            conn.lock().unwrap().execute("DELETE FROM user_feeds WHERE url=?1", params![u])?; Ok(())
-        }).await??; Ok(())
+            conn.lock()
+                .unwrap()
+                .execute("DELETE FROM user_feeds WHERE url=?1", params![u])?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
     }
 
     pub async fn get_video_channels(&self) -> Result<Vec<(String, String, String)>> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, String)>> {
             let c = conn.lock().unwrap();
-            let mut stmt = c.prepare("SELECT platform,channel_id,display_name FROM video_channels ORDER BY display_name")?;
-            let rows: Vec<_> = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?)))?.filter_map(|r| r.ok()).collect();
+            let mut stmt = c.prepare(
+                "SELECT platform,channel_id,display_name FROM video_channels ORDER BY display_name",
+            )?;
+            let rows: Vec<_> = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok(rows)
-        }).await?
+        })
+        .await?
     }
 
-    pub async fn add_video_channel(&self, platform: &str, channel_id: &str, name: &str) -> Result<()> {
-        let conn = self.conn.clone(); let p = platform.to_string(); let c2 = channel_id.to_string(); let n = name.to_string();
+    pub async fn add_video_channel(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        name: &str,
+    ) -> Result<()> {
+        let conn = self.conn.clone();
+        let p = platform.to_string();
+        let c2 = channel_id.to_string();
+        let n = name.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             conn.lock().unwrap().execute("INSERT OR REPLACE INTO video_channels (platform,channel_id,display_name) VALUES (?1,?2,?3)", params![p,c2,n])?; Ok(())
-        }).await??; Ok(())
+        }).await??;
+        Ok(())
     }
 
     pub async fn remove_video_channel(&self, platform: &str, channel_id: &str) -> Result<()> {
-        let conn = self.conn.clone(); let p = platform.to_string(); let c2 = channel_id.to_string();
+        let conn = self.conn.clone();
+        let p = platform.to_string();
+        let c2 = channel_id.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            conn.lock().unwrap().execute("DELETE FROM video_channels WHERE platform=?1 AND channel_id=?2", params![p,c2])?; Ok(())
-        }).await??; Ok(())
+            conn.lock().unwrap().execute(
+                "DELETE FROM video_channels WHERE platform=?1 AND channel_id=?2",
+                params![p, c2],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
     }
 }

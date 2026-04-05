@@ -763,7 +763,10 @@ mod tests {
     #[test]
     fn parse_approve_keywords() {
         assert_eq!(parse_approval_reply("approve"), Some(ApprovalResponse::Yes));
-        assert_eq!(parse_approval_reply("Approved"), Some(ApprovalResponse::Yes));
+        assert_eq!(
+            parse_approval_reply("Approved"),
+            Some(ApprovalResponse::Yes)
+        );
         assert_eq!(parse_approval_reply("  yes  "), Some(ApprovalResponse::Yes));
         assert_eq!(parse_approval_reply("Y"), Some(ApprovalResponse::Yes));
     }
@@ -840,10 +843,7 @@ mod tests {
 
     #[test]
     fn scope_key_format() {
-        assert_eq!(
-            approval_scope_key("wecom", "user1", None),
-            "wecom:user1:"
-        );
+        assert_eq!(approval_scope_key("wecom", "user1", None), "wecom:user1:");
         assert_eq!(
             approval_scope_key("telegram", "user2", Some("thread123")),
             "telegram:user2:thread123"

@@ -87,8 +87,6 @@ mod daemon;
 mod doctor;
 mod gateway;
 mod hardware;
-#[path = "pulse/mod.rs"]
-mod pulse;
 mod health;
 mod heartbeat;
 mod hooks;
@@ -104,6 +102,8 @@ mod peripherals;
 #[cfg(feature = "plugins-wasm")]
 mod plugins;
 mod providers;
+#[path = "pulse/mod.rs"]
+mod pulse;
 mod runtime;
 mod security;
 mod service;

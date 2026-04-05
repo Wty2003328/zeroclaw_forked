@@ -135,6 +135,7 @@ pub use cron_update::CronUpdateTool;
 pub use data_management::DataManagementTool;
 pub use delegate::DelegateTool;
 // Re-exported for downstream consumers of background delegation results.
+pub use deferred_builtin::{DeferredBuiltinStub, DeferredToolRegistry};
 #[allow(unused_imports)]
 pub use delegate::{BackgroundDelegateResult, BackgroundTaskStatus};
 pub use discord_search::DiscordSearchTool;
@@ -159,7 +160,6 @@ pub use knowledge_tool::KnowledgeTool;
 pub use linkedin::LinkedInTool;
 pub use llm_task::LlmTaskTool;
 pub use mcp_client::McpRegistry;
-pub use deferred_builtin::{DeferredBuiltinStub, DeferredToolRegistry};
 pub use mcp_deferred::{ActivatedToolSet, DeferredMcpToolSet};
 pub use mcp_tool::McpToolWrapper;
 pub use memory_forget::MemoryForgetTool;

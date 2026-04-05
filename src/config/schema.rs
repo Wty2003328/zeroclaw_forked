@@ -9171,7 +9171,11 @@ impl Config {
                     decrypt_secret(&store, secret, "config.channels_config.wecom.corp_secret")?;
                 }
                 if let Some(ref mut aes_key) = wc.encoding_aes_key {
-                    decrypt_secret(&store, aes_key, "config.channels_config.wecom.encoding_aes_key")?;
+                    decrypt_secret(
+                        &store,
+                        aes_key,
+                        "config.channels_config.wecom.encoding_aes_key",
+                    )?;
                 }
             }
             if let Some(ref mut qq) = config.channels_config.qq {
@@ -10630,7 +10634,11 @@ impl Config {
                 encrypt_secret(&store, secret, "config.channels_config.wecom.corp_secret")?;
             }
             if let Some(ref mut aes_key) = wc.encoding_aes_key {
-                encrypt_secret(&store, aes_key, "config.channels_config.wecom.encoding_aes_key")?;
+                encrypt_secret(
+                    &store,
+                    aes_key,
+                    "config.channels_config.wecom.encoding_aes_key",
+                )?;
             }
         }
         if let Some(ref mut qq) = config_to_save.channels_config.qq {

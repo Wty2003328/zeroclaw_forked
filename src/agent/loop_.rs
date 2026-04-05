@@ -3427,15 +3427,16 @@ pub(crate) async fn run_tool_call_loop(
                                     channel_reply_target.unwrap_or(channel_name),
                                     None,
                                 );
-                                let resp = mgr.prompt_channel(
-                                    &request,
-                                    channel,
-                                    channel_reply_target.unwrap_or(channel_name),
-                                    None,
-                                    bridge,
-                                    &scope_key,
-                                )
-                                .await;
+                                let resp = mgr
+                                    .prompt_channel(
+                                        &request,
+                                        channel,
+                                        channel_reply_target.unwrap_or(channel_name),
+                                        None,
+                                        bridge,
+                                        &scope_key,
+                                    )
+                                    .await;
                                 tracing::info!(
                                     tool = %tool_name,
                                     decision = ?resp,
@@ -4031,23 +4032,18 @@ pub async fn run(
     // Combine MCP deferred stubs and built-in deferred stubs into a single
     // registry. Register `tool_search` if there are any deferred tools.
     if mcp_deferred_set.is_some() || !builtin_deferred_stubs.is_empty() {
-        let registry = crate::tools::DeferredToolRegistry::new(
-            mcp_deferred_set,
-            builtin_deferred_stubs,
-        );
+        let registry =
+            crate::tools::DeferredToolRegistry::new(mcp_deferred_set, builtin_deferred_stubs);
         tracing::info!(
             "Unified deferred registry: {} total stub(s)",
             registry.len()
         );
-        deferred_section =
-            crate::tools::deferred_builtin::build_deferred_tools_section(&registry);
-        let activated = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::tools::ActivatedToolSet::new(),
-        ));
+        deferred_section = crate::tools::deferred_builtin::build_deferred_tools_section(&registry);
+        let activated =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::tools::ActivatedToolSet::new()));
         activated_handle = Some(std::sync::Arc::clone(&activated));
         tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
-            registry,
-            activated,
+            registry, activated,
         )));
     }
 
@@ -4901,10 +4897,9 @@ pub async fn process_message(
                     );
                     let deferred_registry =
                         crate::tools::DeferredToolRegistry::mcp_only(deferred_set);
-                    deferred_section =
-                        crate::tools::deferred_builtin::build_deferred_tools_section(
-                            &deferred_registry,
-                        );
+                    deferred_section = crate::tools::deferred_builtin::build_deferred_tools_section(
+                        &deferred_registry,
+                    );
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         crate::tools::ActivatedToolSet::new(),
                     ));

@@ -7,8 +7,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::pulse::PulseState;
 use crate::pulse::scheduler;
+use crate::pulse::PulseState;
 
 /// Build the API route tree.
 pub fn routes() -> Router<PulseState> {

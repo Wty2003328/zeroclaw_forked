@@ -306,11 +306,8 @@ mod tests {
         let activated = Arc::new(Mutex::new(ActivatedToolSet::new()));
         let tool = ToolSearchTool::new(
             DeferredToolRegistry::mcp_only(
-                make_mcp_deferred_set(vec![make_mcp_stub(
-                    "fs__read",
-                    "Read a file from disk",
-                )])
-                .await,
+                make_mcp_deferred_set(vec![make_mcp_stub("fs__read", "Read a file from disk")])
+                    .await,
             ),
             Arc::clone(&activated),
         );

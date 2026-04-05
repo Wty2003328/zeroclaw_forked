@@ -69,7 +69,10 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     // channels restart cycle.
     let (gateway_msg_tx, gateway_msg_rx) = if has_supervised_channels(&config) {
         let (tx, rx) = tokio::sync::mpsc::channel::<crate::channels::traits::ChannelMessage>(100);
-        (Some(tx), Some(std::sync::Arc::new(tokio::sync::Mutex::new(Some(rx)))))
+        (
+            Some(tx),
+            Some(std::sync::Arc::new(tokio::sync::Mutex::new(Some(rx)))),
+        )
     } else {
         (None, None)
     };

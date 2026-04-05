@@ -284,10 +284,7 @@ fn split_provider_hint(model: &str) -> (Option<&str>, &str) {
     if let Some((prefix, rest)) = model.split_once('/') {
         // Only treat as a provider hint if the prefix is a simple identifier
         // (no dots, colons, or further slashes) and the rest is non-empty.
-        if !rest.is_empty()
-            && !prefix.is_empty()
-            && !prefix.contains('.')
-            && !prefix.contains(':')
+        if !rest.is_empty() && !prefix.is_empty() && !prefix.contains('.') && !prefix.contains(':')
         {
             return (Some(prefix), rest);
         }
@@ -382,12 +379,10 @@ impl ReliableProvider {
     ) -> impl Iterator<Item = &'a (String, Box<dyn Provider>)> {
         let (hint, _) = split_provider_hint(model);
         let hint = hint.map(|s| s.to_string());
-        self.providers
-            .iter()
-            .filter(move |(name, _)| match &hint {
-                Some(h) => name == h,
-                None => true,
-            })
+        self.providers.iter().filter(move |(name, _)| match &hint {
+            Some(h) => name == h,
+            None => true,
+        })
     }
 
     /// Advance to the next API key and return it, or None if no extra keys configured.
@@ -1024,11 +1019,7 @@ impl Provider for ReliableProvider {
     ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
         let needs_tool_events = request.tools.is_some_and(|tools| !tools.is_empty());
 
-        let first_model = self
-            .model_chain(model)
-            .first()
-            .copied()
-            .unwrap_or(model);
+        let first_model = self.model_chain(model).first().copied().unwrap_or(model);
         let api_model_str = bare_model(first_model).to_string();
 
         for (provider_name, provider) in self.providers_for_model(first_model) {
@@ -2963,8 +2954,14 @@ mod tests {
 
         let provider = ReliableProvider::new(
             vec![
-                ("anthropic".into(), Box::new(anthropic_mock) as Box<dyn Provider>),
-                ("copilot".into(), Box::new(copilot_mock) as Box<dyn Provider>),
+                (
+                    "anthropic".into(),
+                    Box::new(anthropic_mock) as Box<dyn Provider>,
+                ),
+                (
+                    "copilot".into(),
+                    Box::new(copilot_mock) as Box<dyn Provider>,
+                ),
             ],
             0,
             100,
@@ -2977,7 +2974,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, "copilot ok");
-        assert_eq!(anthropic_calls.load(Ordering::SeqCst), 0, "anthropic should not be called");
-        assert_eq!(copilot_calls.load(Ordering::SeqCst), 1, "copilot should be called once");
+        assert_eq!(
+            anthropic_calls.load(Ordering::SeqCst),
+            0,
+            "anthropic should not be called"
+        );
+        assert_eq!(
+            copilot_calls.load(Ordering::SeqCst),
+            1,
+            "copilot should be called once"
+        );
     }
 }

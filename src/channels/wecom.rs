@@ -121,7 +121,10 @@ impl WeComChannel {
         let encrypt_content = match xml::extract_element(body_xml, "Encrypt") {
             Some(v) => v,
             None => {
-                tracing::warn!("WeCom: failed to extract <Encrypt> from body (len={})", body_xml.len());
+                tracing::warn!(
+                    "WeCom: failed to extract <Encrypt> from body (len={})",
+                    body_xml.len()
+                );
                 return None;
             }
         };
@@ -139,13 +142,14 @@ impl WeComChannel {
         }
 
         // Decrypt
-        let (decrypted_xml, _corp_id) = match crypto::decrypt_message(&ent.aes_key, &ent.aes_iv, &encrypt_content) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("WeCom message decrypt error: {e}");
-                return None;
-            }
-        };
+        let (decrypted_xml, _corp_id) =
+            match crypto::decrypt_message(&ent.aes_key, &ent.aes_iv, &encrypt_content) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("WeCom message decrypt error: {e}");
+                    return None;
+                }
+            };
 
         // Parse the decrypted inner XML
         let msg = xml::parse_message_xml(&decrypted_xml)?;
@@ -175,13 +179,17 @@ impl WeComChannel {
             return None;
         }
 
-        let ts = msg
-            .create_time
-            .parse::<u64>()
-            .unwrap_or_else(|_| std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs());
+        let ts = msg.create_time.parse::<u64>().unwrap_or_else(|_| {
+            std::time::UNIX_EPOCH
+                .elapsed()
+                .unwrap_or_default()
+                .as_secs()
+        });
 
         Some(vec![ChannelMessage {
-            id: msg.msg_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: msg
+                .msg_id
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             sender: msg.from_user.clone(),
             reply_target: msg.from_user,
             content,
@@ -308,7 +316,7 @@ impl WeComChannel {
                     }
                     if found_close && chars.peek() == Some(&'(') {
                         chars.next(); // skip (
-                        // skip url until )
+                                      // skip url until )
                         for c in chars.by_ref() {
                             if c == ')' {
                                 break;
@@ -335,9 +343,7 @@ impl WeComChannel {
         webhook_key: &str,
         message: &SendMessage,
     ) -> anyhow::Result<()> {
-        let url = format!(
-            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
-        );
+        let url = format!("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}");
         let plain = Self::strip_markdown(&message.content);
         let body = serde_json::json!({
             "msgtype": "text",
@@ -371,9 +377,7 @@ impl WeComChannel {
             .ok_or_else(|| anyhow::anyhow!("Not in enterprise app mode"))?;
 
         let token = self.get_access_token().await?;
-        let url = format!(
-            "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}"
-        );
+        let url = format!("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}");
 
         let plain = Self::strip_markdown(&message.content);
         let body = serde_json::json!({
@@ -433,9 +437,7 @@ impl Channel for WeComChannel {
         if self.enterprise.is_some() {
             self.get_access_token().await.is_ok()
         } else if let Some(ref key) = self.webhook_key {
-            let url = format!(
-                "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
-            );
+            let url = format!("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}");
             self.http_client()
                 .post(&url)
                 .json(&serde_json::json!({"msgtype":"text","text":{"content":"health_check"}}))
@@ -452,8 +454,10 @@ impl Channel for WeComChannel {
 pub mod crypto {
     use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
     use base64::{
+        alphabet,
         engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD as BASE64},
-        alphabet, engine::DecodePaddingMode, Engine,
+        engine::DecodePaddingMode,
+        Engine,
     };
 
     type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
@@ -549,8 +553,7 @@ pub mod crypto {
 
         // Layout: 16 random bytes | 4-byte content length (big-endian) | content | corp_id
         let content_len =
-            u32::from_be_bytes([unpadded[16], unpadded[17], unpadded[18], unpadded[19]])
-                as usize;
+            u32::from_be_bytes([unpadded[16], unpadded[17], unpadded[18], unpadded[19]]) as usize;
         let content_start = 20;
         let content_end = content_start + content_len;
         if content_end > unpadded.len() {
@@ -699,8 +702,20 @@ allowed_users = ["*"]
         let encrypt_msg = "test_encrypt_content";
 
         let sig = crypto::generate_signature(token, timestamp, nonce, encrypt_msg);
-        assert!(crypto::verify_signature(token, timestamp, nonce, encrypt_msg, &sig));
-        assert!(!crypto::verify_signature(token, timestamp, nonce, encrypt_msg, "bad"));
+        assert!(crypto::verify_signature(
+            token,
+            timestamp,
+            nonce,
+            encrypt_msg,
+            &sig
+        ));
+        assert!(!crypto::verify_signature(
+            token,
+            timestamp,
+            nonce,
+            encrypt_msg,
+            "bad"
+        ));
     }
 
     #[test]
@@ -719,8 +734,14 @@ allowed_users = ["*"]
     #[test]
     fn test_xml_extract_element() {
         let xml = r#"<xml><ToUserName><![CDATA[corp]]></ToUserName><Encrypt><![CDATA[enc_data]]></Encrypt></xml>"#;
-        assert_eq!(xml::extract_element(xml, "ToUserName"), Some("corp".to_string()));
-        assert_eq!(xml::extract_element(xml, "Encrypt"), Some("enc_data".to_string()));
+        assert_eq!(
+            xml::extract_element(xml, "ToUserName"),
+            Some("corp".to_string())
+        );
+        assert_eq!(
+            xml::extract_element(xml, "Encrypt"),
+            Some("enc_data".to_string())
+        );
         assert_eq!(xml::extract_element(xml, "Missing"), None);
     }
 

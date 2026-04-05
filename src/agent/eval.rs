@@ -177,10 +177,7 @@ fn extract_signals(message: &str) -> ComplexitySignals {
         // List markers: "- ", "* ", "1. ", "2. ", etc.
         if trimmed.starts_with("- ")
             || trimmed.starts_with("* ")
-            || trimmed
-                .bytes()
-                .next()
-                .map_or(false, |b| b.is_ascii_digit())
+            || trimmed.bytes().next().map_or(false, |b| b.is_ascii_digit())
                 && trimmed.contains(". ")
         {
             s.list_markers += 1;
@@ -214,7 +211,7 @@ fn extract_signals(message: &str) -> ComplexitySignals {
 
     // ── Code indicators ─────────────────────────────────────────
     s.code_fences = message.matches("```").count() / 2; // pairs
-    // Inline backtick spans (not fences): count single ` not part of ```
+                                                        // Inline backtick spans (not fences): count single ` not part of ```
     let single_bt = message.matches('`').count();
     let triple_bt = message.matches("```").count() * 3;
     s.backtick_spans = single_bt.saturating_sub(triple_bt) / 2;
@@ -573,7 +570,10 @@ mod tests {
 
     #[test]
     fn simple_short_question() {
-        assert_eq!(estimate_complexity("what time is it?"), ComplexityTier::Simple);
+        assert_eq!(
+            estimate_complexity("what time is it?"),
+            ComplexityTier::Simple
+        );
     }
 
     #[test]
@@ -629,7 +629,10 @@ mod tests {
     fn scored_returns_score_with_tier() {
         let (tier, score) = estimate_complexity_scored("hi");
         assert_eq!(tier, ComplexityTier::Simple);
-        assert!(score < 0.10, "simple message score {score} should be < 0.10");
+        assert!(
+            score < 0.10,
+            "simple message score {score} should be < 0.10"
+        );
 
         let (tier, score) = estimate_complexity_scored(
             "Refactor the authentication module to use async traits and implement \
@@ -640,7 +643,10 @@ mod tests {
              - Missing rate limiting",
         );
         assert_eq!(tier, ComplexityTier::Complex);
-        assert!(score > 0.35, "complex message score {score} should be > 0.35");
+        assert!(
+            score > 0.35,
+            "complex message score {score} should be > 0.35"
+        );
     }
 
     #[test]

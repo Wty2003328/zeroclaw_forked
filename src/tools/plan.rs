@@ -57,7 +57,8 @@ impl TaskPlan {
         let mut out = String::from("\u{1f4cb} Plan:\n"); // 📋
         for (i, step) in self.steps.iter().enumerate() {
             let marker = if step.status == StepStatus::InProgress {
-                format!("{} {}  \u{2190} current", step.status.emoji(), step.title) // ←
+                format!("{} {}  \u{2190} current", step.status.emoji(), step.title)
+            // ←
             } else {
                 format!("{} {}", step.status.emoji(), step.title)
             };
@@ -241,10 +242,10 @@ impl Tool for PlanUpdateTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let step_index = args
-            .get("step")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow::anyhow!("missing 'step' integer"))? as usize;
+        let step_index =
+            args.get("step")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| anyhow::anyhow!("missing 'step' integer"))? as usize;
 
         let status_str = args
             .get("status")

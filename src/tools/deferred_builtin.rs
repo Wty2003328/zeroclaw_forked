@@ -68,10 +68,7 @@ impl DeferredToolRegistry {
 
     /// Create a registry with only built-in deferred stubs (no MCP).
     pub fn builtin_only(builtin: Vec<DeferredBuiltinStub>) -> Self {
-        Self {
-            mcp: None,
-            builtin,
-        }
+        Self { mcp: None, builtin }
     }
 
     /// Total number of deferred stubs (MCP + built-in).
@@ -147,7 +144,10 @@ impl DeferredToolRegistry {
                     stub.prefixed_name.to_ascii_lowercase(),
                     stub.description.to_ascii_lowercase()
                 );
-                let hits = terms.iter().filter(|t| haystack.contains(t.as_str())).count();
+                let hits = terms
+                    .iter()
+                    .filter(|t| haystack.contains(t.as_str()))
+                    .count();
                 if hits > 0 {
                     scored.push((
                         StubInfo {
@@ -167,7 +167,10 @@ impl DeferredToolRegistry {
                 stub.name.to_ascii_lowercase(),
                 stub.description.to_ascii_lowercase()
             );
-            let hits = terms.iter().filter(|t| haystack.contains(t.as_str())).count();
+            let hits = terms
+                .iter()
+                .filter(|t| haystack.contains(t.as_str()))
+                .count();
             if hits > 0 {
                 scored.push((
                     StubInfo {

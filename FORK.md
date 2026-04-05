@@ -1,6 +1,6 @@
 # Fork: Wty2003328/zeroclaw
 
-This is a fork of [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw) with additional features focused on **WeCom integration**, **agent safety**, and **task planning**.
+This is a fork of [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw) with additional features focused on **WeCom integration**, **agent safety**, **task planning**, and the **Pulse personal intelligence dashboard**.
 
 ## Added Features
 
@@ -53,3 +53,14 @@ Extends the MCP deferred loading pattern to built-in tools, dramatically reducin
 - **Dynamic tool list**: reflects currently installed/configured tools per session
 - **Opt-out**: `runtime.deferred_builtin_tools = false` to restore eager loading
 - **~97% context savings** on tool schemas for most conversations
+
+### Pulse Dashboard
+
+Integrated personal intelligence dashboard ([Pulse](https://github.com/Wty2003328/pulse)) as a module at `src/pulse/`, accessible via the gateway at `/pulse` in the web UI.
+
+- **10 dashboard widgets**: News Feed, Digest, Weather, Stocks, System Monitor, Google Calendar, Video Subscriptions, Trending, Collectors, ZeroClaw Agent Chat
+- **7 data collectors**: RSS, Hacker News, Reddit, Stocks (Yahoo Finance), Weather (wttr.in), GitHub, YouTube/Bilibili videos
+- **AI provider management**: Configure API keys for Claude, GPT, Gemini, DeepSeek, Copilot, MiniMax, GLM via Settings UI
+- **Adaptive widget grid**: CSS container queries for fluid content adaptation, drag-and-drop layout with react-grid-layout
+- **Separate SQLite database** (`pulse.db`) — no schema conflicts with ZeroClaw's workspace
+- **API routes** mounted at `/api/pulse/*` in the gateway

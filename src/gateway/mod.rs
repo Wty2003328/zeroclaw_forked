@@ -1979,10 +1979,7 @@ async fn handle_wecom_message(
     body: Bytes,
 ) -> impl IntoResponse {
     let Some(ref wecom) = state.wecom else {
-        return (
-            StatusCode::NOT_FOUND,
-            "WeCom not configured".to_string(),
-        );
+        return (StatusCode::NOT_FOUND, "WeCom not configured".to_string());
     };
 
     let msg_signature = params.msg_signature.unwrap_or_default();
@@ -1992,13 +1989,14 @@ async fn handle_wecom_message(
     let body_str = String::from_utf8_lossy(&body);
 
     // Parse and decrypt the incoming message
-    let messages = match wecom.parse_encrypted_message(&msg_signature, &timestamp, &nonce, &body_str) {
-        Some(msgs) => msgs,
-        None => {
-            tracing::warn!("WeCom message decryption/parse failed");
-            return (StatusCode::BAD_REQUEST, "Decryption failed".to_string());
-        }
-    };
+    let messages =
+        match wecom.parse_encrypted_message(&msg_signature, &timestamp, &nonce, &body_str) {
+            Some(msgs) => msgs,
+            None => {
+                tracing::warn!("WeCom message decryption/parse failed");
+                return (StatusCode::BAD_REQUEST, "Decryption failed".to_string());
+            }
+        };
 
     if messages.is_empty() {
         return (StatusCode::OK, "success".to_string());
@@ -2054,8 +2052,12 @@ async fn handle_wecom_message(
                 }
 
                 // Call the LLM (no approval flow in this path)
-                match Box::pin(run_gateway_chat_with_tools(&state_clone, &msg.content, Some(&session_id)))
-                    .await
+                match Box::pin(run_gateway_chat_with_tools(
+                    &state_clone,
+                    &msg.content,
+                    Some(&session_id),
+                ))
+                .await
                 {
                     Ok(response) => {
                         if let Err(e) = wecom
@@ -2075,8 +2077,8 @@ async fn handle_wecom_message(
                             .await;
                     }
                 }
-        }
-    });
+            }
+        });
     }
 
     // Return success immediately (WeCom requires response within 5 seconds)

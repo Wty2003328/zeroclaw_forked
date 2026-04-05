@@ -646,3 +646,53 @@ code, kbd, pre {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ═══ Pulse Dashboard Styles ═══ */
+
+/* Widget container — supports both width and height container queries */
+.widget-container {
+  container-type: size;
+}
+
+/* Fluid typography — uses max() with cqi so text never gets too small */
+.widget-container .cq-text-xs { font-size: max(0.6rem, min(1.6cqi, 0.75rem)); }
+.widget-container .cq-text-sm { font-size: max(0.7rem, min(2cqi, 0.875rem)); }
+.widget-container .cq-text-base { font-size: max(0.75rem, min(2.5cqi, 1rem)); }
+.widget-container .cq-text-lg { font-size: max(0.8rem, min(3.2cqi, 1.125rem)); }
+.widget-container .cq-text-xl { font-size: max(0.875rem, min(4cqi, 1.25rem)); }
+.widget-container .cq-text-2xl { font-size: max(1rem, min(6cqi, 1.5rem)); }
+.widget-container .cq-text-3xl { font-size: max(1.125rem, min(8cqi, 1.875rem)); }
+.widget-container .cq-text-4xl { font-size: max(1.25rem, min(10cqi, 2.25rem)); }
+.widget-container .cq-gap { gap: max(2px, min(1cqi, 6px)); }
+.widget-container .cq-p { padding: max(2px, min(1cqi, 6px)); }
+
+/* Height-based container queries */
+@container (min-height: 90px)  { .cqh-90  { display: flex !important; } .cqh-90-block { display: block !important; } }
+@container (min-height: 120px) { .cqh-120 { display: flex !important; } .cqh-120-block { display: block !important; } }
+@container (min-height: 140px) { .cqh-140 { display: flex !important; } .cqh-140-block { display: block !important; } .cqh-140-grid { display: grid !important; } }
+@container (min-height: 180px) { .cqh-180 { display: flex !important; } .cqh-180-block { display: block !important; } }
+@container (min-height: 200px) { .cqh-200 { display: flex !important; } .cqh-200-block { display: block !important; } }
+@container (min-height: 230px) { .cqh-230 { display: flex !important; } .cqh-230-block { display: block !important; } .cqh-230-grid { display: grid !important; } }
+@container (min-height: 300px) { .cqh-300-block { display: block !important; } }
+
+/* Combined width+height queries */
+@container (min-width: 180px) and (min-height: 200px) { .cqwh-180-200-grid { display: grid !important; } }
+@container (min-width: 250px) and (min-height: 300px) { .cqwh-250-300-block { display: block !important; } }
+@container (min-width: 300px) and (min-height: 200px) { .cqwh-300-200-block { display: block !important; } }
+
+/* Short container horizontal override */
+@container (max-height: 89px) { .cqh-short-flex { display: flex !important; } }
+@container (min-height: 90px) { .cqh-short-flex { display: none !important; } .cqh-tall-flex { display: flex !important; } }
+
+/* react-grid-layout base styles */
+.react-grid-layout { position: relative; transition: height 200ms ease; }
+.react-grid-item { transition: none; }
+.react-grid-item.cssTransforms { transition: transform 150ms ease, width 150ms ease, height 150ms ease; }
+.react-grid-item.resizing { transition: none !important; z-index: 1; }
+.react-grid-item.react-draggable-dragging { transition: none !important; z-index: 3; }
+.react-grid-item > .react-resizable-handle { position: absolute; width: 12px; height: 12px; background: transparent; z-index: 10; }
+.react-grid-item > .react-resizable-handle-se { bottom: 0; right: 0; cursor: se-resize; }
+.react-grid-item > .react-resizable-handle-sw { bottom: 0; left: 0; cursor: sw-resize; }
+.react-grid-item > .react-resizable-handle-ne { top: 0; right: 0; cursor: ne-resize; }
+.react-grid-item > .react-resizable-handle-nw { top: 0; left: 0; cursor: nw-resize; }
+.react-grid-placeholder { background: var(--pc-bg-elevated, #242836); opacity: 0.3; border-radius: 0.5rem; z-index: 2; border: 1px dashed var(--pc-accent, #6c8cff); }

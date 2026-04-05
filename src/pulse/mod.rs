@@ -79,9 +79,9 @@ pub async fn init(data_dir: &str) -> anyhow::Result<PulseState> {
         interval: "15m".to_string(),
         min_score: 50,
     };
-    collector_list.push(Arc::new(
-        collectors::hackernews::HackerNewsCollector::new(hn_config),
-    ));
+    collector_list.push(Arc::new(collectors::hackernews::HackerNewsCollector::new(
+        hn_config,
+    )));
 
     // Stocks collector
     let stocks_config = config::StocksConfig {
@@ -116,7 +116,10 @@ pub async fn init(data_dir: &str) -> anyhow::Result<PulseState> {
         db.clone(),
     )));
 
-    tracing::info!("Pulse: initialized with {} collectors", collector_list.len());
+    tracing::info!(
+        "Pulse: initialized with {} collectors",
+        collector_list.len()
+    );
 
     // Start scheduler in background
     let sched = Arc::new(scheduler::Scheduler::new(
