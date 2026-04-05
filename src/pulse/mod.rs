@@ -15,7 +15,7 @@ pub mod models;
 pub mod scheduler;
 pub mod storage;
 
-use axum::{routing::get, Router};
+use axum::Router;
 use std::sync::{Arc, Mutex};
 
 use collectors::Collector;

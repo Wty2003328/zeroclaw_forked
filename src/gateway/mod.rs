@@ -380,6 +380,8 @@ pub struct AppState {
     /// WebAuthn state for hardware key authentication (optional, requires `webauthn` feature)
     #[cfg(feature = "webauthn")]
     pub webauthn: Option<Arc<api_webauthn::WebAuthnState>>,
+    /// Pulse personal intelligence dashboard (optional)
+    pub pulse: Option<Arc<crate::pulse::PulseState>>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -912,6 +914,7 @@ pub async fn run_gateway(
         } else {
             None
         },
+        pulse: None, // initialized separately via pulse::init()
     };
 
     // Config PUT needs larger body limit (1MB)
@@ -1029,6 +1032,16 @@ pub async fn run_gateway(
         "/api/plugins",
         get(api_plugins::plugin_routes::list_plugins),
     );
+
+    // ── Pulse Dashboard API (optional) ──
+    let inner = if let Some(ref pulse_state) = state.pulse {
+        inner.nest(
+            "/api/pulse",
+            crate::pulse::routes().with_state(pulse_state.as_ref().clone()),
+        )
+    } else {
+        inner
+    };
 
     let inner = inner
         // ── SSE event stream ──

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use std::time::Duration;
 
-use super::{parse_interval, Collector};
+use super::Collector;
 use crate::pulse::models::RawItem;
 use crate::pulse::storage::PulseDatabase;
 

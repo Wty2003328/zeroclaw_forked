@@ -202,7 +202,7 @@ async fn test_provider(
     Json(body): Json<TestProviderRequest>,
 ) -> Json<serde_json::Value> {
     // Use provided key or fall back to stored key
-    let api_key = if let Some(key) = body.api_key.filter(|k| !k.is_empty()) {
+    let _api_key = if let Some(key) = body.api_key.filter(|k| !k.is_empty()) {
         key
     } else if let Ok(Some(stored)) = state.db.get_provider(&id).await {
         match stored.api_key {

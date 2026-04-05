@@ -87,6 +87,8 @@ mod daemon;
 mod doctor;
 mod gateway;
 mod hardware;
+#[path = "pulse/mod.rs"]
+mod pulse;
 mod health;
 mod heartbeat;
 mod hooks;

@@ -82,7 +82,7 @@ impl Collector for StocksCollector {
 
         tracing::debug!("Fetching stock quotes for: {:?}", self.config.symbols);
 
-        let now = Utc::now();
+        let _now = Utc::now();
         let mut items = Vec::new();
 
         for symbol in &self.config.symbols {
